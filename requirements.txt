@@ -1,0 +1,11 @@
+streamlit
+psycopg2-binary
+pandas
+fpdf2
+reportlab
+num2words
+qrcode
+Pillow
+pypdf
+plotly
+openpyxl
