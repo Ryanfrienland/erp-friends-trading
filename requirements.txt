@@ -9,3 +9,4 @@ Pillow
 pypdf
 plotly
 openpyxl
+supabase
