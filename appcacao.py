@@ -507,21 +507,31 @@ def generer_pdf_international(
       en coordonnées absolues, ce qui évite tout chevauchement si le
       contenu au-dessus varie en hauteur.
     """
-    #--- Calculs automatiques si certaines valeurs sont manquantes ---
+    # --- Calculs automatiques ---
     if poids_net is None:
         poids_net = qte
+    
+    # Convertir nb_colis en entier (si chaîne vide, on met 0)
+    try:
+        nb_colis_int = int(nb_colis) if nb_colis is not None and nb_colis != "" else 0
+    except (ValueError, TypeError):
+        nb_colis_int = 0
+    
     if poids_brut is None:
-        # Si on a le nombre de colis, on ajoute le poids des sacs
-        if nb_colis is not None and nb_colis > 0:
-            poids_brut = poids_net + (nb_colis * poids_sac_kg)
+        if nb_colis_int > 0:
+            poids_brut = poids_net + (nb_colis_int * poids_sac_kg)
         else:
-            poids_brut = poids_net   # fallback
-    if nb_colis is None:
-        # Estimation à partir du conditionnement standard (60 kg/sac)
+            poids_brut = poids_net
+    
+    # Si nb_colis n'est pas fourni ou est vide, on estime automatiquement
+    if nb_colis is None or nb_colis == "":
         if conditionnement and "60kg" in conditionnement:
-            nb_colis = int(poids_net / 60) if poids_net > 0 else 0
+            nb_colis_int = int(poids_net / 60) if poids_net > 0 else 0
         else:
-            nb_colis = 0
+            nb_colis_int = 0
+    
+    # Réaffecter nb_colis pour le reste du code (désormais c'est un entier)
+    nb_colis = nb_colis_int
             
     pdf = CommercialInvoicePDF()
     pdf.alias_nb_pages()
@@ -648,7 +658,7 @@ def generer_pdf_international(
     pdf.cell(38, 5.5, poids_brut_txt, align="C")
     pdf.cell(48, 5.5, poids_net_txt, align="C")
     pdf.cell(48, 5.5, conditionnement, align="C")
-    pdf.cell(28, 5.5, str(nb_colis) if nb_colis and nb_colis > 0 else "-", align="C")
+    pdf.cell(28, 5.5, str(nb_colis) if nb_colis > 0 else "-", align="C")
     pdf.cell(28, 5.5, "", align="C")
     pdf.ln(9)
 
