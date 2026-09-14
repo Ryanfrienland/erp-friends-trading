@@ -5238,9 +5238,14 @@ elif choix == "📝 Contrats":
                 if qte <= 0 or pu <= 0:
                     st.error("❌ La quantité prévue et le prix unitaire doivent être supérieurs à 0.")
                 else:
-                    date_c_str = date_c.strftime("%d/%m/%Y")
-                    delai_str = date_delai.strftime("%Y-%m-%d") 
-                    
+                    # ⚠️ FORMAT ISO pour la base de données (YYYY-MM-DD)
+                    date_c_db = date_c.strftime("%Y-%m-%d")
+                    delai_str = date_delai.strftime("%Y-%m-%d")
+            
+                    # ⚠️ FORMAT FRANÇAIS pour l'affichage PDF (DD/MM/YYYY)
+                    date_c_pdf = date_c.strftime("%d/%m/%Y")
+                    delai_pdf = date_delai.strftime("%d/%m/%Y")
+            
                     with conn.cursor() as cur:
                         cur.execute(
                             """
@@ -5250,22 +5255,22 @@ elif choix == "📝 Contrats":
                              prix_unitaire, delai_livraison, provenance, termes_de_paiement, statut)
                             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, 'Actif')
                             RETURNING id""",
-                            (dict_f[f_nom], num_c_auto, date_c_str, lieu, qte, pu, delai_str, provenance, termes)
+                            (dict_f[f_nom], num_c_auto, date_c_db, lieu, qte, pu, delai_str, provenance, termes)
                         )
                         id_contrat = cur.fetchone()[0]
                         conn.commit()
                     log_action(f"Création contrat {num_c_auto} avec {f_nom}")
                     st.success(f"🎉 Contrat {num_c_auto} enregistré avec succès !")
-
-                    # Formatage PDF
+            
+                    # Formatage PDF (utilise les variables en français)
                     path_pdf = generer_contrat_pdf({
                         "num": num_c_auto,
-                        "date": date_c_str,
+                        "date": date_c_pdf,
                         "fournisseur": f_nom,
                         "lieu": lieu,
                         "qte": qte,
                         "pu": pu,
-                        "delai": date_delai.strftime("%d/%m/%Y"),
+                        "delai": delai_pdf,
                         "provenance": provenance,
                         "termes_de_paiement": termes
                     })
