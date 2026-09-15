@@ -480,7 +480,7 @@ def generer_pdf_international(
     poids_net=None,
     nb_colis="",
     conditionnement="Sacs de jute 60kg",
-    poids_sac_kg=0.5,
+    poids_sac_kg=1.0,
     hs_code="1801.00",
     numero_commande="",
 ):
