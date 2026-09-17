@@ -4500,7 +4500,7 @@ elif choix == "👥 Clients":
                     with conn.cursor() as cur:
                         cur.execute(
                             """INSERT INTO clients 
-                            (nom, email, telephone, ville, rccm, nui, adresse_complete, pays, code_postal, devise_preferee, condition_paiement, langue_facture, date_ajout) 
+                            (nom, email, telephone, ville, rccm, tva_intra, adresse_complete, pays, code_postal, devise_preferee, condition_paiement, langue_facture, date_ajout) 
                             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                             (nom, email, tel, ville, rccm, nui, adresse_complete, pays, code_postal, devise, condition, langue, datetime.now().strftime("%Y-%m-%d"))
                         )
@@ -4520,7 +4520,7 @@ elif choix == "👥 Clients":
             id_to_edit = dict_edit_c[chosen_c]
 
             current_vals = fetch_one(
-                """SELECT nom, email, telephone, ville, rccm, nui, adresse_complete, pays, 
+                """SELECT nom, email, telephone, ville, rccm, tva_intra, adresse_complete, pays, 
                           code_postal, devise_preferee, condition_paiement, langue_facture 
                    FROM clients WHERE id=%s""",
                 (id_to_edit,)
@@ -4558,7 +4558,7 @@ elif choix == "👥 Clients":
                     with conn.cursor() as cur:
                         cur.execute(
                             """UPDATE clients SET 
-                               nom=%s, email=%s, telephone=%s, ville=%s, rccm=%s, nui=%s, adresse_complete=%s, 
+                               nom=%s, email=%s, telephone=%s, ville=%s, rccm=%s, tva_intra=%s, adresse_complete=%s, 
                                pays=%s, code_postal=%s, devise_preferee=%s, condition_paiement=%s, langue_facture=%s 
                                WHERE id=%s""",
                             (m_nom, m_email, m_tel, m_ville, m_rccm, m_nui, m_adresse_complete, 
@@ -4594,12 +4594,16 @@ elif choix == "👥 Clients":
         else:
             st.info("Aucun client à supprimer.")
 
-    st.divider()
-    st.subheader("📊 Base de données Clients")
-    df_clients = get_dataframe_from_query(
-        "SELECT id, nom as Nom, email as Email, pays as Pays, devise_preferee as Devise, langue_facture as Langue FROM clients ORDER BY id DESC"
-    )
-    st.dataframe(df_clients, use_container_width=True)
+        st.divider()
+        st.subheader("📊 Base de données Clients")
+        # Correction : Ajout des autres colonnes dans la requête SELECT
+        df_clients = get_dataframe_from_query(
+            """SELECT id, nom as Nom, email as Email, telephone as Téléphone, 
+                      ville as Ville, pays as Pays, tva_intra as NUI, 
+                      devise_preferee as Devise, langue_facture as Langue 
+               FROM clients ORDER BY id DESC"""
+        )
+        st.dataframe(df_clients, use_container_width=True)
     
 elif choix == "🏗️ Prestataires & Transitaires":
     st.title("🏗️ Prestataires & Transitaires")
