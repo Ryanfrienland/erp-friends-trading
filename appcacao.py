@@ -4467,7 +4467,7 @@ if choix == "🤝 Fournisseurs":
 
 elif choix == "👥 Clients":
     st.title("👥 Répertoire des Clients Internationaux")
-    tab1, tab2, tab3 = st.tabs(["➕ Ajouter", "📝 Modifier", "🗑️ Supprimer"])
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ Ajouter", "📝 Modifier", "🗑️ Supprimer", "📊 Liste des Clients"])
 
     # --- TAB 1 : AJOUTER ---
     with tab1:
@@ -4594,17 +4594,28 @@ elif choix == "👥 Clients":
         else:
             st.info("Aucun client à supprimer.")
 
-        st.divider()
+    # --- TAB 4 : LISTE ---
+    with tab4:
         st.subheader("📊 Base de données Clients")
-        # Correction : Ajout des autres colonnes dans la requête SELECT
+        st.write("Voici la liste complète des clients enregistrés dans le système.")
+        
+        # Bouton pour forcer le rechargement des données
+        if st.button("🔄 Rafraîchir la liste", use_container_width=True):
+            st.rerun()
+
+        # Récupération et affichage des données
         df_clients = get_dataframe_from_query(
-            """SELECT id, nom as Nom, email as Email, telephone as Téléphone, 
+            """SELECT id as ID, nom as Nom, email as Email, telephone as Téléphone, 
                       ville as Ville, pays as Pays, tva_intra as NUI, 
                       devise_preferee as Devise, langue_facture as Langue 
                FROM clients ORDER BY id DESC"""
         )
-        st.dataframe(df_clients, use_container_width=True)
-    
+        
+        if not df_clients.empty:
+            st.dataframe(df_clients, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun client enregistré pour le moment.")
+            
 elif choix == "🏗️ Prestataires & Transitaires":
     st.title("🏗️ Prestataires & Transitaires")
     t1, t2 = st.tabs(["🏢 Prestataires", "🚢 Transitaires"])
