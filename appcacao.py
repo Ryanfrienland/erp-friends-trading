@@ -3814,219 +3814,778 @@ elif choix == "🧾 Achats (Entrees)":
                         st.success(f"✅ Paiement de {montant_regle:,.0f} FCFA enregistré ! Reste dû : {nouveau_reste:,.0f} FCFA. Le document de règlement (réf. {ref_reglement}) a été soumis à la Direction pour validation.")
                         st.rerun()                  
 elif choix == "🛍️ Ventes (Sorties)":
-    st.title("🛍️ Gestion des Ventes & Exportations")
-    
-    stock_actuel = get_stock_actuel()
-    st.metric("📦 Stock Actuel Global", f"{stock_actuel:,.2f} kg")
-    
-    tab1, tab2, tab3 = st.tabs(["🤝 Enregistrer un Contrat de Vente","📄 Historique & Factures Commerciales","💸 Règlement Client"])
-    
-    # ==========================================
-    # TAB 1 : ENREGISTREMENT DE LA VENTE
-    # ==========================================
-    with tab1:
-        clients = fetch_all("SELECT id, nom, devise_preferee FROM clients")
-        dict_c = {c[1]: {"id": c[0], "devise": c[2]} for c in clients}
-        
-        magasins_dispo = fetch_all("SELECT id, nom FROM magasins")
-        dict_m = {m[1]: m[0] for m in magasins_dispo}
-        
-        if not clients or not magasins_dispo:
-            st.warning("⚠️ Veuillez configurer au moins un client et un magasin avant de procéder.")
+    # =================================================================
+    # STYLES MODERNES
+    # =================================================================
+    st.markdown("""
+        <style>
+            .sale-header {
+                background: linear-gradient(135deg, #065F46 0%, #047857 100%);
+                padding: 1.8rem 2rem;
+                border-radius: 16px;
+                color: white;
+                margin-bottom: 1.5rem;
+                box-shadow: 0 10px 30px -5px rgba(6, 95, 70, 0.4);
+            }
+            .sale-header h1 { color: #FFF !important; margin: 0 !important; font-size: 1.9rem; }
+            .sale-header p  { color: #A7F3D0 !important; margin: 0.2rem 0 0 0; font-size: 1rem; }
+
+            .stepper {
+                display: flex; justify-content: space-between;
+                padding: 1rem 0; margin-bottom: 1.5rem;
+            }
+            .step {
+                flex: 1; text-align: center; padding: 0.7rem 0.4rem;
+                border-radius: 10px; margin: 0 4px;
+                background: #F1F5F9; color: #64748B;
+                font-size: 0.85rem; font-weight: 600;
+                border: 2px solid transparent;
+                transition: all 0.2s;
+            }
+            .step.active {
+                background: linear-gradient(135deg, #059669, #047857);
+                color: white; border-color: #10B981;
+                box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+            }
+            .step.done { background: #D1FAE5; color: #065F46; border-color: #10B981; }
+
+            .recap-card {
+                background: #F8FAFC; border-radius: 12px;
+                padding: 1rem 1.2rem; margin-bottom: 1rem;
+                border-left: 4px solid #059669;
+            }
+            .recap-card h4 {
+                color: #065F46; font-size: 0.9rem;
+                text-transform: uppercase; letter-spacing: 0.5px;
+                margin: 0 0 0.5rem 0;
+            }
+            .recap-row {
+                display: flex; justify-content: space-between;
+                padding: 0.35rem 0; border-bottom: 1px dashed #E2E8F0;
+                font-size: 0.9rem;
+            }
+            .recap-row:last-child { border-bottom: none; }
+            .recap-row span:first-child { color: #64748B; }
+            .recap-row span:last-child { color: #1E293B; font-weight: 600; }
+        </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+        <div class="sale-header">
+            <h1>🛍️ Vente & Exportation Internationale</h1>
+            <p>Pilotez vos contrats d'export de cacao de bout en bout — Devis, qualité, logistique, paiement</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # =================================================================
+    # INITIALISATION DE L'ÉTAT DU WIZARD
+    # =================================================================
+    if "sale_step" not in st.session_state:
+        st.session_state.sale_step = 1
+    if "sale_data" not in st.session_state:
+        st.session_state.sale_data = {}
+
+    # =================================================================
+    # INDICATEUR D'ÉTAPES
+    # =================================================================
+    steps_labels = ["1️⃣ Client & Commande", "2️⃣ Produit & Qualité",
+                    "3️⃣ Logistique", "4️⃣ Paiement", "5️⃣ Récapitulatif"]
+    steps_html = ""
+    for i, label in enumerate(steps_labels, start=1):
+        css = "active" if st.session_state.sale_step == i else \
+              ("done" if st.session_state.sale_step > i else "")
+        steps_html += f'<div class="step {css}">{label}</div>'
+    st.markdown(f'<div class="stepper">{steps_html}</div>', unsafe_allow_html=True)
+
+    # =================================================================
+    # DONNÉES DE BASE (chargées une fois)
+    # =================================================================
+    clients_db = fetch_all("SELECT id, nom, devise_preferee, email, pays, nui FROM clients ORDER BY nom")
+    dict_clients = {c[1]: {"id": c[0], "devise": c[2], "email": c[3], "pays": c[4], "nui": c[5]} for c in clients_db}
+
+    magasins_db = fetch_all("SELECT id, nom FROM magasins ORDER BY nom")
+    dict_magasins = {m[1]: m[0] for m in magasins_db}
+
+    banques_db = fetch_all("SELECT nom, swift, iban, numero_compte FROM banques ORDER BY nom")
+    dict_banques = {b[0]: {"swift": b[1], "iban": b[2], "numero_compte": b[3]} for b in banques_db}
+
+    if not clients_db or not magasins_db:
+        st.warning("⚠️ Configurez au moins un client et un magasin avant de continuer.")
+        st.stop()
+
+    d = st.session_state.sale_data  # raccourci
+
+    # =================================================================
+    # ÉTAPE 1 : CLIENT & COMMANDE
+    # =================================================================
+    if st.session_state.sale_step == 1:
+        with st.container(border=True):
+            st.markdown("### 👤 Étape 1 — Client & Référence Commande")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                client_nom = st.selectbox(
+                    "Client acheteur *",
+                    list(dict_clients.keys()),
+                    index=list(dict_clients.keys()).index(d["client_nom"]) if d.get("client_nom") in dict_clients else 0,
+                    key="w1_client"
+                )
+                client_info = dict_clients[client_nom]
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown(f"**🌍 Pays :** {client_info['pays'] or 'N/A'}")
+                with col_b:
+                    st.markdown(f"**🆔 Tax ID :** {client_info['nui'] or 'N/A'}")
+                st.caption(f"📧 {client_info['email'] or 'Email non renseigné'}")
+
+            with c2:
+                numero_commande = st.text_input(
+                    "Référence commande client (P.O.) *",
+                    value=d.get("numero_commande", ""),
+                    placeholder="Ex: PO-2026-0458",
+                    help="Numéro de bon de commande fourni par le client — indispensable pour la Commercial Invoice."
+                )
+                date_vente = st.date_input(
+                    "Date de la vente",
+                    value=d.get("date_vente", date.today()),
+                    key="w1_date"
+                )
+
+            st.divider()
+            st.markdown("#### 📝 Observations commerciales")
+            observations = st.text_area(
+                "Notes / Instructions particulières",
+                value=d.get("observations", ""),
+                placeholder="Ex: Client demande certification Rainforest, envoi des docs par DHL...",
+                height=80
+            )
+
+        col_nav1, col_nav2 = st.columns([1, 1])
+        with col_nav2:
+            if st.button("Suivant : Produit & Qualité →", type="primary", use_container_width=True):
+                if not numero_commande.strip():
+                    st.error("❌ La référence commande client (P.O.) est obligatoire.")
+                else:
+                    d.update({
+                        "client_nom": client_nom,
+                        "client_info": client_info,
+                        "numero_commande": numero_commande.strip(),
+                        "date_vente": date_vente,
+                        "observations": observations,
+                    })
+                    st.session_state.sale_step = 2
+                    st.rerun()
+
+    # =================================================================
+    # ÉTAPE 2 : PRODUIT & QUALITÉ
+    # =================================================================
+    elif st.session_state.sale_step == 2:
+        with st.container(border=True):
+            st.markdown("### 📦 Étape 2 — Produit, Quantité & Qualité")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                magasin_source = st.selectbox(
+                    "Magasin de départ *",
+                    list(dict_magasins.keys()),
+                    index=list(dict_magasins.keys()).index(d["magasin_source"]) if d.get("magasin_source") in dict_magasins else 0,
+                    key="w2_magasin"
+                )
+
+            with c2:
+                # Récupération des lots en stock dans ce magasin
+                lots_dispo = fetch_all("""
+                    SELECT a.numero_de_lot, a.poids_net_paye, a.poids_net,
+                           aq.taux_humidite, aq.statut_qualite
+                    FROM stock s
+                    JOIN achats a ON s.id_achat = a.id
+                    LEFT JOIN analyses_qualite aq ON a.id = aq.id_achat
+                    WHERE s.magasin_destination = %s
+                      AND s.type = 'Entrée'
+                      AND a.statut != 'En attente de facturation'
+                    ORDER BY a.date DESC
+                """, (magasin_source,))
+
+                lots_options = ["🎯 Vente générique (sans lot spécifique)"] + \
+                               [f"Lot {l[0]} — {float(l[1] or 0):,.0f} kg — Qualité: {l[4] or 'N/A'}" for l in lots_dispo]
+
+                lot_selectionne = st.selectbox(
+                    "Lot source à vendre",
+                    lots_options,
+                    index=0,
+                    key="w2_lot",
+                    help="Sélectionnez le lot spécifique pour tracer la qualité, ou vente générique."
+                )
+
+            st.divider()
+
+            # --- Détails produit ---
+            st.markdown("#### 🌱 Détails du Produit")
+            c3, c4, c5 = st.columns(3)
+            with c3:
+                grade_produit = st.selectbox(
+                    "Grade / Qualité commerciale",
+                    ["Grade I (Standard Export)", "Grade II", "Grade III", "Tout Venant", "Premium / Specialty"],
+                    index=["Grade I (Standard Export)", "Grade II", "Grade III", "Tout Venant", "Premium / Specialty"].index(d.get("grade_produit", "Grade I (Standard Export)")),
+                    key="w2_grade"
+                )
+            with c4:
+                certification = st.selectbox(
+                    "Certification",
+                    ["Aucune", "Rainforest Alliance", "UTZ", "Fairtrade", "Organic / Bio", "Multiple"],
+                    index=["Aucune", "Rainforest Alliance", "UTZ", "Fairtrade", "Organic / Bio", "Multiple"].index(d.get("certification", "Aucune")),
+                    key="w2_cert"
+                )
+            with c5:
+                humidite_facturee = st.number_input(
+                    "Humidité facturée (%)",
+                    min_value=0.0, max_value=20.0,
+                    value=float(d.get("humidite_facturee", 7.5)),
+                    step=0.1,
+                    help="Taux d'humidité officiel annoncé sur la facture commerciale."
+                )
+
+            st.divider()
+
+            # --- Quantités & conditionnement ---
+            st.markdown("#### ⚖️ Quantité & Conditionnement")
+            c6, c7, c8 = st.columns(3)
+            with c6:
+                poids_net = st.number_input(
+                    "Poids net (kg) *",
+                    min_value=0.0,
+                    value=float(d.get("poids_net", 0.0)),
+                    step=500.0,
+                    key="w2_poids_net"
+                )
+            with c7:
+                poids_sac_kg = st.number_input(
+                    "Poids par sac (kg)",
+                    min_value=1.0, max_value=100.0,
+                    value=float(d.get("poids_sac_kg", 60.0)),
+                    step=1.0,
+                    key="w2_poids_sac"
+                )
+            with c8:
+                # Calcul auto du nombre de sacs
+                nb_sacs_auto = int(poids_net / poids_sac_kg) if poids_sac_kg > 0 else 0
+                nombre_de_sacs = st.number_input(
+                    "Nombre de sacs *",
+                    min_value=0,
+                    value=int(d.get("nombre_de_sacs", nb_sacs_auto)),
+                    step=1,
+                    key="w2_nb_sacs"
+                )
+
+            # Calcul auto du poids brut
+            poids_brut_auto = poids_net + (nombre_de_sacs * 0.5)  # 0.5 kg par sac vide
+            c9, c10 = st.columns(2)
+            with c9:
+                poids_brut = st.number_input(
+                    "Poids brut (kg) — calculé automatiquement",
+                    min_value=0.0,
+                    value=float(d.get("poids_brut", poids_brut_auto)),
+                    step=10.0,
+                    help="Poids net + poids des sacs vides (0.5 kg par sac)."
+                )
+            with c10:
+                conditionnement = st.text_input(
+                    "Type de conditionnement",
+                    value=d.get("conditionnement", "Sacs de jute 60kg — neufs, propres, sans odeur"),
+                    key="w2_cond"
+                )
+
+        col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
+        with col_nav1:
+            if st.button("← Retour", use_container_width=True):
+                st.session_state.sale_step = 1
+                st.rerun()
+        with col_nav3:
+            if st.button("Suivant : Logistique →", type="primary", use_container_width=True):
+                if poids_net <= 0:
+                    st.error("❌ Le poids net doit être supérieur à 0.")
+                elif nombre_de_sacs <= 0:
+                    st.error("❌ Le nombre de sacs doit être supérieur à 0.")
+                else:
+                    d.update({
+                        "magasin_source": magasin_source,
+                        "lot_selectionne": lot_selectionne,
+                        "numero_lot_source": lot_selectionne.split(" — ")[0].replace("Lot ", "").strip() if lot_selectionne != lots_options[0] else None,
+                        "grade_produit": grade_produit,
+                        "certification": certification,
+                        "humidite_facturee": humidite_facturee,
+                        "poids_net": poids_net,
+                        "poids_brut": poids_brut,
+                        "poids_sac_kg": poids_sac_kg,
+                        "nombre_de_sacs": nombre_de_sacs,
+                        "conditionnement": conditionnement,
+                    })
+                    st.session_state.sale_step = 3
+                    st.rerun()
+
+    # =================================================================
+    # ÉTAPE 3 : LOGISTIQUE & INCOTERM
+    # =================================================================
+    elif st.session_state.sale_step == 3:
+        with st.container(border=True):
+            st.markdown("### 🚢 Étape 3 — Logistique Internationale")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                incoterm = st.selectbox(
+                    "Incoterm 2020 *",
+                    ["FOB", "CIF", "CFR", "EXW", "DAP", "DDP", "FCA"],
+                    index=["FOB", "CIF", "CFR", "EXW", "DAP", "DDP", "FCA"].index(d.get("incoterm", "FOB")),
+                    help="FOB = Free On Board — le plus courant pour l'export cacao Cameroun."
+                )
+            with c2:
+                mode_transport = st.selectbox(
+                    "Mode de transport *",
+                    ["Maritime (Conteneur 20')", "Maritime (Conteneur 40')", "Maritime (Vrac)", "Aérien", "Routier"],
+                    index=["Maritime (Conteneur 20')", "Maritime (Conteneur 40')", "Maritime (Vrac)", "Aérien", "Routier"].index(d.get("mode_transport", "Maritime (Conteneur 20')")),
+                    key="w3_mode"
+                )
+
+            st.divider()
+            st.markdown("#### 🌍 Ports")
+            c3, c4 = st.columns(2)
+            with c3:
+                port_depart = st.text_input(
+                    "Port d'embarquement *",
+                    value=d.get("port_depart", "Port Autonome de Douala (PAD), Cameroun"),
+                    key="w3_pdep"
+                )
+            with c4:
+                port_arrivee = st.text_input(
+                    "Port de destination *",
+                    value=d.get("port_arrivee", ""),
+                    placeholder="Ex: Port de Rotterdam, Pays-Bas",
+                    key="w3_parr"
+                )
+
+            st.divider()
+            st.markdown("#### 📄 Références logistiques")
+            c5, c6 = st.columns(2)
+            with c5:
+                numero_booking = st.text_input(
+                    "N° Booking / B/L",
+                    value=d.get("numero_booking", ""),
+                    placeholder="Ex: MAEU-2026-0458",
+                    help="Peut être renseigné plus tard après réservation du fret."
+                )
+            with c6:
+                transitaire = st.text_input(
+                    "Transitaire / Freight forwarder",
+                    value=d.get("transitaire", ""),
+                    placeholder="Ex: SDV Cameroun, Maersk Logistics"
+                )
+
+            st.divider()
+            st.markdown("#### 🏷️ Codes douaniers")
+            c7, c8 = st.columns(2)
+            with c7:
+                hs_code = st.text_input(
+                    "Code SH / HS Code",
+                    value=d.get("hs_code", "1801.00"),
+                    help="1801.00 = Fèves de cacao, entières ou brisées."
+                )
+            with c8:
+                pays_origine = st.text_input(
+                    "Pays d'origine",
+                    value=d.get("pays_origine", "Cameroun"),
+                    key="w3_pays"
+                )
+
+        col_nav1, col_nav3 = st.columns([1, 1])
+        with col_nav1:
+            if st.button("← Retour", use_container_width=True):
+                st.session_state.sale_step = 2
+                st.rerun()
+        with col_nav3:
+            if st.button("Suivant : Paiement →", type="primary", use_container_width=True):
+                if not port_arrivee.strip():
+                    st.error("❌ Le port de destination est obligatoire.")
+                else:
+                    d.update({
+                        "incoterm": incoterm,
+                        "mode_transport": mode_transport,
+                        "port_depart": port_depart,
+                        "port_arrivee": port_arrivee,
+                        "numero_booking": numero_booking,
+                        "transitaire": transitaire,
+                        "hs_code": hs_code,
+                        "pays_origine": pays_origine,
+                    })
+                    st.session_state.sale_step = 4
+                    st.rerun()
+
+    # =================================================================
+    # ÉTAPE 4 : PAIEMENT & BANQUE
+    # =================================================================
+    elif st.session_state.sale_step == 4:
+        with st.container(border=True):
+            st.markdown("### 💰 Étape 4 — Conditions Financières & Bancaires")
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                qte_kg = float(d.get("poids_net", 0.0))
+                pu = st.number_input(
+                    "Prix unitaire *",
+                    min_value=0.0,
+                    value=float(d.get("pu", 0.0)),
+                    step=10.0,
+                    key="w4_pu"
+                )
+            with c2:
+                devise_client = d["client_info"]["devise"] if d.get("client_info") else "XAF"
+                devises = ["XAF", "EUR", "USD", "GBP"]
+                devise = st.selectbox(
+                    "Devise de facturation *",
+                    devises,
+                    index=devises.index(devise_client) if devise_client in devises else 0,
+                    key="w4_devise"
+                )
+            with c3:
+                total_vente = qte_kg * pu
+                st.metric("Montant total", f"{total_vente:,.0f} {devise}")
+
+            st.divider()
+            st.markdown("#### 💳 Termes de paiement")
+            termes_list = [
+                "T/T 100% à la livraison entrepôt",
+                "T/T 90% à la livraison — 10% après B/L",
+                "T/T 90% à la livraison — 5% B/L — 5% à destination",
+                "Crédit Documentaire (L/C) irrévocable à vue",
+                "Crédit Documentaire (L/C) 30 jours",
+                "CAD (Cash Against Documents)",
+            ]
+            termes_paiement = st.selectbox(
+                "Termes *",
+                termes_list,
+                index=termes_list.index(d.get("termes_paiement")) if d.get("termes_paiement") in termes_list else 0,
+                key="w4_termes"
+            )
+
+            c4, c5 = st.columns(2)
+            with c4:
+                reference_lc = st.text_input(
+                    "Référence L/C (si applicable)",
+                    value=d.get("reference_lc", ""),
+                    placeholder="Ex: LC-UBA-2026-0458"
+                )
+            with c5:
+                statut_paiement = st.selectbox(
+                    "Statut initial du paiement *",
+                    ["En attente", "Avance reçue", "Payé en totalité"],
+                    index=["En attente", "Avance reçue", "Payé en totalité"].index(d.get("statut_paiement", "En attente")),
+                    key="w4_statut"
+                )
+
+            avance_saisie = 0.0
+            if statut_paiement == "Avance reçue":
+                avance_saisie = st.number_input(
+                    "💵 Montant de l'avance reçue *",
+                    min_value=0.0,
+                    max_value=float(total_vente) if total_vente > 0 else 1_000_000_000.0,
+                    value=float(d.get("avance_saisie", 0.0)),
+                    step=100000.0,
+                    help="Montant strictement inférieur au total de la vente."
+                )
+                if avance_saisie > 0 and total_vente > 0:
+                    pct = (avance_saisie / total_vente) * 100
+                    st.caption(f"➡️ Avance : **{pct:.1f}%** — Reste dû : **{total_vente - avance_saisie:,.0f} {devise}**")
+            elif statut_paiement == "Payé en totalité":
+                st.success(f"✅ La totalité ({total_vente:,.0f} {devise}) sera considérée comme encaissée.")
+
+            st.divider()
+            st.markdown("#### 🏦 Banque du client (pour la facture)")
+            c6, c7 = st.columns(2)
+            with c6:
+                banque_client = st.text_input(
+                    "Nom de la banque du client",
+                    value=d.get("banque_client", ""),
+                    placeholder="Ex: HSBC London, Citibank NY"
+                )
+            with c7:
+                swift_client = st.text_input(
+                    "Code SWIFT / BIC du client",
+                    value=d.get("swift_client", ""),
+                    placeholder="Ex: HSBCGB2L"
+                )
+
+        col_nav1, col_nav3 = st.columns([1, 1])
+        with col_nav1:
+            if st.button("← Retour", use_container_width=True):
+                st.session_state.sale_step = 3
+                st.rerun()
+        with col_nav3:
+            if st.button("Vérifier le récapitulatif →", type="primary", use_container_width=True):
+                if pu <= 0:
+                    st.error("❌ Le prix unitaire doit être supérieur à 0.")
+                elif statut_paiement == "Avance reçue" and (avance_saisie <= 0 or avance_saisie >= total_vente):
+                    st.error("❌ Le montant de l'avance doit être strictement compris entre 0 et le total.")
+                else:
+                    d.update({
+                        "pu": pu,
+                        "devise": devise,
+                        "total_vente": total_vente,
+                        "termes_paiement": termes_paiement,
+                        "reference_lc": reference_lc,
+                        "statut_paiement": statut_paiement,
+                        "avance_saisie": avance_saisie,
+                        "banque_client": banque_client,
+                        "swift_client": swift_client,
+                    })
+                    st.session_state.sale_step = 5
+                    st.rerun()
+
+    # =================================================================
+    # ÉTAPE 5 : RÉCAPITULATIF & VALIDATION
+    # =================================================================
+    elif st.session_state.sale_step == 5:
+        st.markdown("### ✅ Étape 5 — Récapitulatif & Validation")
+
+        col_r1, col_r2 = st.columns(2)
+
+        with col_r1:
+            st.markdown(f"""
+                <div class="recap-card">
+                    <h4>👤 Client & Commande</h4>
+                    <div class="recap-row"><span>Client</span><span>{d.get('client_nom','')}</span></div>
+                    <div class="recap-row"><span>P.O. Client</span><span>{d.get('numero_commande','')}</span></div>
+                    <div class="recap-row"><span>Pays client</span><span>{d.get('client_info',{}).get('pays','') or 'N/A'}</span></div>
+                    <div class="recap-row"><span>Date</span><span>{d.get('date_vente','')}</span></div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown(f"""
+                <div class="recap-card">
+                    <h4>📦 Produit & Qualité</h4>
+                    <div class="recap-row"><span>Lot source</span><span>{d.get('numero_lot_source') or 'Vente générique'}</span></div>
+                    <div class="recap-row"><span>Grade</span><span>{d.get('grade_produit','')}</span></div>
+                    <div class="recap-row"><span>Certification</span><span>{d.get('certification','')}</span></div>
+                    <div class="recap-row"><span>Humidité facturée</span><span>{d.get('humidite_facturee', 0)} %</span></div>
+                    <div class="recap-row"><span>Poids net</span><span>{d.get('poids_net',0):,.2f} kg</span></div>
+                    <div class="recap-row"><span>Poids brut</span><span>{d.get('poids_brut',0):,.2f} kg</span></div>
+                    <div class="recap-row"><span>Sacs</span><span>{d.get('nombre_de_sacs',0)} × {d.get('poids_sac_kg',60)} kg</span></div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        with col_r2:
+            st.markdown(f"""
+                <div class="recap-card">
+                    <h4>🚢 Logistique</h4>
+                    <div class="recap-row"><span>Incoterm</span><span>{d.get('incoterm','')}</span></div>
+                    <div class="recap-row"><span>Mode</span><span>{d.get('mode_transport','')}</span></div>
+                    <div class="recap-row"><span>Port départ</span><span>{d.get('port_depart','')}</span></div>
+                    <div class="recap-row"><span>Port arrivée</span><span>{d.get('port_arrivee','')}</span></div>
+                    <div class="recap-row"><span>Booking</span><span>{d.get('numero_booking') or 'À renseigner'}</span></div>
+                    <div class="recap-row"><span>HS Code</span><span>{d.get('hs_code','')}</span></div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown(f"""
+                <div class="recap-card">
+                    <h4>💰 Paiement</h4>
+                    <div class="recap-row"><span>Prix unitaire</span><span>{d.get('pu',0):,.2f} {d.get('devise','')}/kg</span></div>
+                    <div class="recap-row"><span>Total</span><span>{d.get('total_vente',0):,.0f} {d.get('devise','')}</span></div>
+                    <div class="recap-row"><span>Termes</span><span>{d.get('termes_paiement','')[:40]}...</span></div>
+                    <div class="recap-row"><span>Statut</span><span>{d.get('statut_paiement','')}</span></div>
+                    <div class="recap-row"><span>Avance</span><span>{d.get('avance_saisie',0):,.0f} {d.get('devise','')}</span></div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        st.divider()
+
+        # Vérification du stock disponible
+        stock_check = fetch_one("""
+            SELECT
+                (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type='Entrée') -
+                (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type='Sortie')
+        """, (d.get("magasin_source"), d.get("magasin_source")))
+        stock_dispo = float(stock_check[0]) if stock_check and stock_check[0] else 0.0
+
+        if d.get("poids_net", 0) > stock_dispo:
+            st.error(f"⚠️ Stock insuffisant dans **{d.get('magasin_source')}** : "
+                     f"disponible {stock_dispo:,.2f} kg — demandé {d.get('poids_net',0):,.2f} kg.")
         else:
-            with st.form("form_vente", clear_on_submit=True):
-                st.subheader("👤 Identités & Logistique")
-                col1, col2 = st.columns(2)
-                nom_c = col1.selectbox("Sélectionner le Client *", list(dict_c.keys()))
-                magasin_source = col2.selectbox("Magasin de départ *", list(dict_m.keys()))
-                
-                st.subheader("🌍 Détails de l'Exportation (International)")
-                e1, e2, e3 = st.columns(3)
-                incoterm = e1.selectbox("Incoterm *", ["FOB", "CIF", "CFR", "EXW", "DAP"], help="Règle internationale de transfert des risques")
-                port_depart = e2.text_input("Port d'embarquement", value="Port de Kribi, Cameroun")
-                port_arrivee = e3.text_input("Port de destination")
+            st.success(f"✅ Stock disponible suffisant dans {d.get('magasin_source')} : {stock_dispo:,.2f} kg.")
 
-                st.subheader("💰 Détails Financiers")
-                c1, c2, c3 = st.columns(3)
-                qte = c1.number_input("Quantité Nette (kg) *", min_value=0.0, step=100.0)
-                pu = c2.number_input("Prix Unitaire (PU) *", min_value=0.0, step=10.0)
-                devise_client = dict_c[nom_c]["devise"] if nom_c else "XAF"
-                
-                devises_possibles = ["XAF", "EUR", "USD", "GBP"]
-                idx_devise = devises_possibles.index(devise_client) if devise_client in devises_possibles else 0
-                devise_app = c3.selectbox("Devise", devises_possibles, index=idx_devise)
-                
-                c4, c5 = st.columns(2)
-                liste_termes = [
-                    "90% LIVRAISON ENTREPÔT - 10% APRÈS DÉLIVRANCE DU BILL OF LADING",
-                    "90% LIVRAISON ENTREPÔT - 8% APRÈS DÉLIVRANCE BL - 2% À DESTINATION",
-                    "90% LIVRAISON ENTREPÔT - 5% APRÈS DÉLIVRANCE BL - 5% À DESTINATION",
-                    "100% APRÈS DÉLIVRANCE DU BILL OF LADING"
-                ]
-                termes_paiement = c4.selectbox("Termes de paiement *", liste_termes)
-                statut = c5.selectbox("Statut Paiement", ["En attente", "Avance reçue", "Payé en totalité"])
+        st.markdown("<br>", unsafe_allow_html=True)
 
-                st.info("💡 La Commercial Invoice sera générée sur la base de cet Incoterm, de cette devise et de ces termes de paiement.")
-                submitted = st.form_submit_button("✅ Valider l'Exportation", use_container_width=True)
-                
-                if submitted:
-                    if qte <= 0 or pu <= 0:
-                        st.error("❌ La quantité et le prix unitaire doivent être supérieurs à 0.")
+        col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
+        with col_nav1:
+            if st.button("← Modifier", use_container_width=True):
+                st.session_state.sale_step = 4
+                st.rerun()
+
+        with col_nav3:
+            if st.button("🚀 Valider & Enregistrer la Vente", type="primary", use_container_width=True):
+                try:
+                    id_c = d["client_info"]["id"]
+                    id_m = dict_magasins[d["magasin_source"]]
+                    total_vente = d["total_vente"]
+
+                    if d["statut_paiement"] == "Payé en totalité":
+                        avance_initiale = total_vente
+                    elif d["statut_paiement"] == "Avance reçue":
+                        avance_initiale = d["avance_saisie"]
                     else:
-                        try:
-                            id_c = dict_c[nom_c]["id"]
-                            id_m = dict_m[magasin_source]
-                            total_vente = qte * pu
-                            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        avance_initiale = 0.0
 
+                    date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    documents_requis = "Commercial Invoice, Packing List, Bill of Lading, Certificat d'Origine, Certificat Phytosanitaire"
 
-                            if statut == "Payé en totalité":
-                                avance_initiale = total_vente
-                            elif statut == "Avance reçue":
-                                avance_initiale = total_vente * 0.5   # ou demander un champ dédié
-                            else:
-                                avance_initiale = 0.0
-                                
-                            with conn.cursor() as cur:
-                                cur.execute("""
-                                    INSERT INTO ventes 
-                                    (date_vente, client_nom, id_magasin, id_client, quantite_kg, prix_unitaire,
-                                    montant_total, total, statut_paiement, termes_paiement, statut_livraison,
-                                    incoterm, port_embarquement, port_dechargement, devise, montant_avance) 
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'En attente d''expédition', %s, %s, %s, %s, %s)
-                                    RETURNING id
-                                """, (date_now, nom_c, id_m, id_c, qte, pu, total_vente, total_vente,
-                                      statut, termes_paiement, incoterm, port_depart, port_arrivee, devise_app, avance_initiale))
-                    
-                                id_vente = cur.fetchone()[0]
-                    
-                                cur.execute("""
-                                    INSERT INTO documents_generes (type_doc, reference, montant, demandeur, description, statut)
-                                    VALUES (%s, %s, %s, %s, %s, %s)
-                                """, ('facture_vente', f"INV-{id_vente:04d}", total_vente,
-                                      st.session_state.get('username', 'Agent'),
-                                      f"Vente à {nom_c} de {qte} kg - Incoterm {incoterm}", 'EN_ATTENTE'))
-                    
-                                conn.commit()
-                            st.success(f"✅ Vente de {qte:,.2f} kg enregistrée sous la référence INV-{id_vente:04d} et soumise à la Direction !")
-                            st.rerun()
-                        except Exception as e:
-                            conn.rollback()
-                            st.error(f"❌ Erreur lors de l'enregistrement : {e}")
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            INSERT INTO ventes (
+                                date_vente, client_nom, id_magasin, id_client,
+                                quantite_kg, prix_unitaire, montant_total, total,
+                                statut_paiement, termes_paiement, statut_livraison,
+                                incoterm, port_embarquement, port_dechargement, devise,
+                                montant_avance,
+                                numero_commande_client, numero_lot_source,
+                                poids_brut, poids_net, nombre_de_sacs, poids_sac_kg,
+                                conditionnement, hs_code, pays_origine,
+                                grade_produit, humidite_facturee, certification,
+                                mode_transport, numero_booking, transitaire,
+                                banque_client, swift_client, reference_lc,
+                                documents_requis, observations
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'En attente d''expédition',
+                                %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            ) RETURNING id
+                        """, (
+                            date_now, d["client_nom"], id_m, id_c,
+                            d["poids_net"], d["pu"], total_vente, total_vente,
+                            d["statut_paiement"], d["termes_paiement"],
+                            d["incoterm"], d["port_depart"], d["port_arrivee"], d["devise"],
+                            avance_initiale,
+                            d["numero_commande"], d.get("numero_lot_source"),
+                            d["poids_brut"], d["poids_net"], d["nombre_de_sacs"], d["poids_sac_kg"],
+                            d["conditionnement"], d["hs_code"], d["pays_origine"],
+                            d["grade_produit"], d["humidite_facturee"], d["certification"],
+                            d["mode_transport"], d.get("numero_booking"), d.get("transitaire"),
+                            d.get("banque_client"), d.get("swift_client"), d.get("reference_lc"),
+                            documents_requis, d.get("observations")
+                        ))
+                        id_vente = cur.fetchone()[0]
 
-    # ==========================================
-    # TAB 2 : HISTORIQUE ET GÉNÉRATION PDF
-    # ==========================================
+                        cur.execute("""
+                            INSERT INTO documents_generes (type_doc, reference, montant, demandeur, description, statut)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (
+                            'facture_vente', f"INV-{id_vente:04d}", total_vente,
+                            st.session_state.get('username', 'Agent'),
+                            f"Export {d['poids_net']:,.0f} kg cacao vers {d['client_nom']} ({d['port_arrivee']}) — P.O. {d['numero_commande']}",
+                            'EN_ATTENTE'
+                        ))
+                        conn.commit()
+
+                    log_action(f"Vente export INV-{id_vente:04d} : {d['poids_net']:,.0f} kg vers {d['client_nom']}")
+
+                    st.balloons()
+                    st.success(
+                        f"🎉 Vente **INV-{id_vente:04d}** enregistrée ! "
+                        f"Avance : {avance_initiale:,.0f} {d['devise']} — "
+                        f"Reste dû : {total_vente - avance_initiale:,.0f} {d['devise']}"
+                    )
+                    st.info("📌 Le document a été transmis à la Direction pour validation de la Commercial Invoice.")
+
+                    # Reset du wizard
+                    st.session_state.sale_step = 1
+                    st.session_state.sale_data = {}
+                    st.rerun()
+
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"❌ Erreur lors de l'enregistrement : {e}")
+
+    # =================================================================
+    # ONGLET 2 : HISTORIQUE & FACTURES
+    # =================================================================
+    tab1, tab2, tab3 = st.tabs([
+        "🚀 Nouvelle Vente",
+        "📄 Historique & Factures",
+        "💸 Règlement Client"
+    ])
+
+    with tab1:
+        st.info("👆 Utilisez le wizard ci-dessus pour créer une nouvelle vente export.")
+
     with tab2:
         st.divider()
-        st.subheader("🖨️ Édition de la Commercial Invoice (Facture Pro)")
+        st.subheader("🖨️ Édition de la Commercial Invoice")
 
-        # Requête adaptée pour PostgreSQL (LPAD déjà utilisé)
         df_ventes = get_dataframe_from_query("""
-            SELECT v.id, v.id_client, v.date_vente as Date, c.nom as Client, v.quantite_kg as Qte,
-                v.prix_unitaire as PU, v.total as Total, v.devise as Devise,
-                v.incoterm as Incoterm, v.termes_paiement as Termes,
-                v.port_embarquement, v.port_dechargement,
-                COALESCE((
-                    SELECT statut FROM documents_generes
-                    WHERE type_doc = 'facture_vente'
-                        AND reference = 'INV-' || LPAD(v.id::text, 4, '0')
-                    ORDER BY id DESC LIMIT 1
-                ), 'EN_ATTENTE') AS Statut_Validation,
-                COALESCE((
-                    SELECT signataire FROM documents_generes
-                    WHERE type_doc = 'facture_vente'
-                        AND reference = 'INV-' || LPAD(v.id::text, 4, '0')
-                    ORDER BY id DESC LIMIT 1
-                ), '') AS Signataire
+            SELECT v.id, v.id_client, v.date_vente as Date, c.nom as Client,
+                   v.quantite_kg as Qte, v.prix_unitaire as PU, v.total as Total,
+                   v.devise as Devise, v.incoterm as Incoterm, v.termes_paiement as Termes,
+                   v.port_embarquement, v.port_dechargement,
+                   COALESCE(v.numero_commande_client,'') AS PO,
+                   COALESCE((
+                       SELECT statut FROM documents_generes
+                       WHERE type_doc = 'facture_vente'
+                         AND reference = 'INV-' || LPAD(v.id::text, 4, '0')
+                       ORDER BY id DESC LIMIT 1
+                   ), 'EN_ATTENTE') AS Statut_Validation,
+                   COALESCE((
+                       SELECT signataire FROM documents_generes
+                       WHERE type_doc = 'facture_vente'
+                         AND reference = 'INV-' || LPAD(v.id::text, 4, '0')
+                       ORDER BY id DESC LIMIT 1
+                   ), '') AS Signataire
             FROM ventes v
             JOIN clients c ON v.id_client = c.id
             ORDER BY v.id DESC
         """)
-        
-        st.dataframe(df_ventes, use_container_width=True)
 
-        # --- 1. GESTION DES BANQUES ---
-        with st.expander("🏦 Ajouter un nouveau compte bancaire"):
-            with st.form("form_add_banque", clear_on_submit=True):
-                st.info("💡 Ce compte sera disponible pour toutes vos futures factures.")
-                b1, b2, b3, b4 = st.columns(4)
-                b_nom = b1.text_input("Nom de la Banque *", placeholder="Ex: UBA Cameroun")
-                b_swift = b2.text_input("Code SWIFT / BIC *")
-                b_iban = b3.text_input("IBAN *")
-                b_numero_compte = b4.text_input("Numéro de Compte *")
-
-                if st.form_submit_button("✅ Enregistrer la Banque", use_container_width=True):
-                    if b_nom and b_swift and b_iban and b_numero_compte:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "INSERT INTO banques (nom, swift, iban, numero_compte) VALUES (%s, %s, %s, %s)", 
-                                (b_nom, b_swift, b_iban, b_numero_compte)
-                            )
-                            conn.commit()
-                        st.success(f"La banque {b_nom} a été ajoutée avec succès !")
-                        st.rerun()
-                    else:
-                        st.error("❌ Tous les champs (Nom, SWIFT, IBAN, Numéro de Compte) sont obligatoires.")
-
-        # Après le formulaire et son traitement
-            st.divider()
-            st.markdown("##### 📋 Banques déjà enregistrées")
-            try:
-                banques_df = get_dataframe_from_query("SELECT id, nom, swift, iban, numero_compte FROM banques ORDER BY nom")
-                if not banques_df.empty:
-                    st.dataframe(banques_df, use_container_width=True, hide_index=True)
-                    # Option : bouton pour supprimer une banque
-                    with st.expander("🗑️ Supprimer une banque"):
-                        banques_list = banques_df.values.tolist()
-                        dict_banques = {f"{b[1]} ({b[2]})": b[0] for b in banques_list}
-                        banque_a_supprimer = st.selectbox("Sélectionner la banque à supprimer", list(dict_banques.keys()))
-                        if st.button("❌ Supprimer cette banque", type="primary"):
-                            try:
-                                with conn.cursor() as cur:
-                                    cur.execute("DELETE FROM banques WHERE id = %s", (dict_banques[banque_a_supprimer],))
-                                    conn.commit()
-                                st.success("Banque supprimée !")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erreur : {e}")
-                else:
-                    st.info("Aucune banque enregistrée.")
-            except Exception as e:
-                st.error(f"Erreur lors du chargement des banques : {e}")
-    
-        # --- 2. SÉLECTION DE LA VENTE ET DE LA BANQUE ---
         if not df_ventes.empty:
+            st.dataframe(df_ventes, use_container_width=True, hide_index=True)
+
+            with st.expander("🏦 Ajouter un compte bancaire"):
+                with st.form("form_add_banque_new", clear_on_submit=True):
+                    b1, b2, b3, b4 = st.columns(4)
+                    b_nom = b1.text_input("Banque *")
+                    b_swift = b2.text_input("SWIFT / BIC *")
+                    b_iban = b3.text_input("IBAN *")
+                    b_numero_compte = b4.text_input("N° Compte *")
+                    if st.form_submit_button("✅ Enregistrer", use_container_width=True):
+                        if all([b_nom, b_swift, b_iban, b_numero_compte]):
+                            with conn.cursor() as cur:
+                                cur.execute("INSERT INTO banques (nom, swift, iban, numero_compte) VALUES (%s,%s,%s,%s)",
+                                            (b_nom, b_swift, b_iban, b_numero_compte))
+                                conn.commit()
+                            st.success("Banque ajoutée !")
+                            st.rerun()
+
             st.divider()
             sel = st.selectbox(
-                "📦 Sélectionner une expédition pour générer le document :", 
-                df_ventes.values.tolist(), 
-                format_func=lambda x: f"INV-{int(x[0]):04d} | Client: {x[3]} | {x[4]:,.2f} kg | {x[6]:,.2f} {x[7]} ({x[10] or 'EN ATTENTE'})"
+                "📦 Sélectionner une expédition :",
+                df_ventes.values.tolist(),
+                format_func=lambda x: f"INV-{int(x[0]):04d} | {x[3]} | {x[4]:,.0f} kg | {x[6]:,.0f} {x[7]} | {x[11]} ({x[12]})"
             )
 
-            banques_db = fetch_all("SELECT nom, swift, iban, numero_compte FROM banques")
-            
             if not banques_db:
-                st.warning("⚠️ Aucune banque enregistrée. Veuillez en ajouter une via le menu ci-dessus.")
+                st.warning("⚠️ Aucune banque enregistrée.")
             else:
-                dict_banques = {b[0]: {"swift": b[1], "iban": b[2], "numero_compte": b[3]} for b in banques_db}
-                choix_banque = st.selectbox("💳 Compte bancaire à afficher sur la facture :", list(dict_banques.keys()))
+                choix_banque = st.selectbox("💳 Compte bancaire pour la facture :", list(dict_banques.keys()))
 
-                # --- 3. GÉNÉRATION DU PDF (Strictement sous condition de validation) ---
-                if st.button("📄 Générer la Commercial Invoice en PDF", use_container_width=True, type="primary"):
+                if st.button("📄 Générer la Commercial Invoice", type="primary", use_container_width=True):
                     statut_valid = sel[12] if len(sel) > 12 else None
                     signataire = sel[13] if len(sel) > 13 else None
 
                     if statut_valid != 'VALIDE':
-                        st.error("❌ **Impression bloquée !** Cette vente n'a pas encore été validée par la Direction. "
-                                 "La Commercial Invoice officielle ne peut pas être générée tant que le document n'est pas approuvé.")
+                        st.error("❌ Cette vente n'a pas encore été validée par la Direction.")
                     else:
                         try:
                             cachet = None
                             if signataire:
                                 res_c = fetch_one("SELECT fichier_cachet FROM cachets_direction WHERE role_signataire = %s", (signataire,))
-                                if res_c:
-                                    cachet = res_c[0]
+                                if res_c: cachet = res_c[0]
 
                             infos_client = fetch_one("SELECT nom, email, pays, nui FROM clients WHERE id = %s", (sel[1],))
                             dict_client = {
@@ -4039,18 +4598,20 @@ elif choix == "🛍️ Ventes (Sorties)":
                             ref_doc = f"INV-{int(sel[0]):04d}"
                             row_code = fetch_one("SELECT code_verification FROM documents_generes WHERE reference = %s AND type_doc = %s", (ref_doc, 'facture_vente'))
                             code_verif = row_code[0] if row_code else None
-                            poids_net = qte
-                            # estimation du nombre de colis (sacs de 60 kg)
-                            nb_colis = int(qte / 60) if qte > 0 else 0
-                            # poids brut = poids net + (nb_colis * 0.5) (poids d'un sac vide)
-                            poids_brut = poids_net + (nb_colis * 0.5)
+
+                            # Récupérer les données enrichies
+                            row_full = fetch_one("""
+                                SELECT poids_net, poids_brut, nombre_de_sacs, conditionnement,
+                                       hs_code, pays_origine, grade_produit, humidite_facturee,
+                                       numero_commande_client, numero_lot_source,
+                                       certification, numero_booking
+                                FROM ventes WHERE id = %s
+                            """, (int(sel[0]),))
+
                             nom_fichier = generer_pdf_international(
                                 id_doc=int(sel[0]),
                                 date_str=str(sel[2]).split(" ")[0],
                                 client=dict_client,
-                                poids_brut=poids_brut,
-                                poids_net=qte,
-                                nb_colis=nb_colis,
                                 qte=sel[4],
                                 pu=sel[5],
                                 total=sel[6],
@@ -4063,111 +4624,101 @@ elif choix == "🛍️ Ventes (Sorties)":
                                 banque_swift=dict_banques[choix_banque]["swift"],
                                 banque_iban=dict_banques[choix_banque]["iban"],
                                 banque_numero_compte=dict_banques[choix_banque]["numero_compte"],
-                                cachet_blob=cachet
+                                cachet_blob=cachet,
+                                numero_commande=row_full[8] if row_full else "",
+                                numero_lot=row_full[9] if row_full else "",
+                                nb_colis=row_full[2] if row_full else 0,
+                                conditionnement=row_full[3] if row_full else "Sacs de jute 60kg",
+                                hs_code=row_full[4] if row_full else "1801.00",
+                                pays_origine=row_full[5] if row_full else "Cameroun",
+                                poids_net=row_full[0] if row_full else sel[4],
+                                poids_brut=row_full[1] if row_full else sel[4],
                             )
 
                             with open(nom_fichier, "rb") as pdf_file:
                                 pdf_bytes = pdf_file.read()
-                            
                             if os.path.exists(nom_fichier):
                                 os.remove(nom_fichier)
 
-                            if code_verif and 'apposer_qr_sur_pdf' in globals():
+                            if code_verif:
                                 pdf_bytes = apposer_qr_sur_pdf(pdf_bytes, code_verif, ref_doc)
 
-                            st.success("✅ Commercial Invoice officielle générée avec succès !")
+                            st.success("✅ Commercial Invoice générée !")
                             st.download_button(
-                                label="⬇️ Télécharger la Commercial Invoice (PDF)",
+                                "⬇️ Télécharger la Commercial Invoice",
                                 data=pdf_bytes,
                                 file_name=f"Commercial_Invoice_{int(sel[0]):04d}.pdf",
                                 mime="application/pdf",
                                 use_container_width=True
                             )
                         except Exception as ex_gen:
-                            st.error(f"❌ Erreur lors de la génération du PDF : {ex_gen}")              
-    # ==========================================
-    # TAB 3 : RÈGLEMENT CLIENT
-    # ==========================================
+                            st.error(f"❌ Erreur PDF : {ex_gen}")
+        else:
+            st.info("Aucune vente enregistrée pour le moment.")
+
+    # =================================================================
+    # ONGLET 3 : RÈGLEMENT CLIENT
+    # =================================================================
     with tab3:
         st.markdown("### 💸 Guichet de Règlement Client")
-    
+
         ventes_dues = fetch_all("""
             SELECT v.id, v.client_nom, v.devise, v.total,
                    COALESCE(v.montant_avance, 0) AS avance,
                    (v.total - COALESCE(v.montant_avance, 0)) AS reste,
-                   v.statut_paiement
+                   v.statut_paiement, v.numero_commande_client
             FROM ventes v
             WHERE COALESCE(v.montant_avance, 0) < v.total
               AND v.statut_paiement != 'Payé en totalité'
             ORDER BY v.id DESC
         """)
-    
+
         if not ventes_dues:
             st.success("🎉 Aucune vente en attente de règlement.")
         else:
             dict_ventes_dues = {
-                f"INV-{v[0]:04d} | {v[1]} | Reste: {v[4]:,.0f} {v[2]}": v
+                f"INV-{v[0]:04d} | {v[1]} | Reste: {v[5]:,.0f} {v[2]}": v
                 for v in ventes_dues
             }
-    
+
             with st.form("form_reglement_client", clear_on_submit=True):
                 choix_v = st.selectbox("Sélectionner la vente", list(dict_ventes_dues.keys()))
                 v = dict_ventes_dues[choix_v]
-                id_vente, client_nom, devise, total, avance, reste, statut_actuel = v
-    
+                id_vente, client_nom, devise, total, avance, reste, statut_actuel, po = v
+
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Total facturé", f"{total:,.0f} {devise}")
                 c2.metric("Déjà encaissé", f"{avance:,.0f} {devise}")
                 c3.metric("Reste à payer", f"{reste:,.0f} {devise}")
-    
-                montant = st.number_input(
-                    "Montant encaissé aujourd'hui",
-                    min_value=0.0,
-                    max_value=float(reste),
-                    step=5000.0
-                )
+
+                montant = st.number_input("Montant encaissé", min_value=0.0, max_value=float(reste), step=5000.0)
                 date_p = st.date_input("Date d'encaissement", value=date.today())
-                mode = st.selectbox("Mode de paiement",
-                                    ["Virement bancaire", "Espèces", "Chèque", "Mobile Money"])
-    
-                submit = st.form_submit_button("✅ Enregistrer le paiement",
-                                               type="primary",
-                                               use_container_width=True)
-    
-                if submit:
+                mode = st.selectbox("Mode", ["Virement bancaire", "Espèces", "Chèque", "Mobile Money"])
+
+                if st.form_submit_button("✅ Enregistrer", type="primary", use_container_width=True):
                     if montant <= 0:
-                        st.error("❌ Le montant doit être supérieur à 0.")
+                        st.error("❌ Montant invalide.")
                     else:
                         nouvelle_avance = avance + montant
                         nouveau_reste = total - nouvelle_avance
-                        nouveau_statut = ("Payé en totalité"
-                                          if nouveau_reste <= 0.01
-                                          else "Avance reçue")
-    
+                        nouveau_statut = "Payé en totalité" if nouveau_reste <= 0.01 else "Avance reçue"
+
                         with conn.cursor() as cur:
                             cur.execute("""
-                                UPDATE ventes
-                                SET montant_avance = %s,
-                                    statut_paiement = %s
-                                WHERE id = %s
+                                UPDATE ventes SET montant_avance = %s, statut_paiement = %s WHERE id = %s
                             """, (nouvelle_avance, nouveau_statut, id_vente))
-    
+
                             ref = f"ENC-{id_vente}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                             cur.execute("""
-                                INSERT INTO documents_generes
-                                    (type_doc, reference, montant, demandeur,
-                                     description, statut)
+                                INSERT INTO documents_generes (type_doc, reference, montant, demandeur, description, statut)
                                 VALUES (%s, %s, %s, %s, %s, 'EN_ATTENTE')
                             """, ('reglement_client', ref, montant,
                                   st.session_state.get('username', 'Agent'),
-                                  f"Encaissement {client_nom} - INV-{id_vente:04d} "
-                                  f"({montant:,.0f} {devise} via {mode})"))
+                                  f"Encaissement {client_nom} - INV-{id_vente:04d} ({montant:,.0f} {devise} via {mode})"))
                             conn.commit()
-    
-                        log_action(f"Encaissement client {montant:,.0f} {devise} "
-                                   f"pour vente N°{id_vente} ({ref})")
-                        st.success(f"✅ Paiement de {montant:,.0f} {devise} enregistré ! "
-                                   f"Reste dû : {nouveau_reste:,.0f} {devise}")
+
+                        log_action(f"Encaissement {montant:,.0f} {devise} vente N°{id_vente}")
+                        st.success(f"✅ Paiement enregistré ! Reste : {nouveau_reste:,.0f} {devise}")
                         st.rerun()
 
 if choix == "🤝 Fournisseurs":
