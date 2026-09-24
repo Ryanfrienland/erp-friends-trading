@@ -2780,18 +2780,26 @@ if choix == "🏠 Tableau de Bord":
         # --- Ventes : regrouper par devise ---
         ventes_par_devise = {}
         creances_par_devise = {}
-        total_volume_vendu = 0
-
+        
         with conn.cursor() as cur:
-            # Totaux des ventes par devise
+            # Totaux des ventes (toutes confondues)
             cur.execute("""
-                SELECT devise, COALESCE(SUM(total), 0) 
-                FROM ventes 
-                WHERE statut != 'En attente de facturation' 
+                SELECT devise, COALESCE(SUM(total), 0)
+                FROM ventes
                 GROUP BY devise
             """)
             for row in cur.fetchall():
                 ventes_par_devise[row[0]] = row[1]
+        
+            # Créances = tout ce qui n'est PAS totalement payé
+            cur.execute("""
+                SELECT devise, COALESCE(SUM(total), 0)
+                FROM ventes
+                WHERE statut_paiement IS DISTINCT FROM 'Payé en totalité'
+                GROUP BY devise
+            """)
+            for row in cur.fetchall():
+                creances_par_devise[row[0]] = row[1]
 
             # Créances clients par devise
             cur.execute("""
@@ -3811,7 +3819,7 @@ elif choix == "🛍️ Ventes (Sorties)":
     stock_actuel = get_stock_actuel()
     st.metric("📦 Stock Actuel Global", f"{stock_actuel:,.2f} kg")
     
-    tab1, tab2 = st.tabs(["🤝 Enregistrer un Contrat de Vente", "📄 Historique & Factures Commerciales"])
+    tab1, tab2, tab3 = st.tabs(["🤝 Enregistrer un Contrat de Vente","📄 Historique & Factures Commerciales","💸 Règlement Client"])
     
     # ==========================================
     # TAB 1 : ENREGISTREMENT DE LA VENTE
@@ -3870,17 +3878,23 @@ elif choix == "🛍️ Ventes (Sorties)":
                             id_m = dict_m[magasin_source]
                             total_vente = qte * pu
                             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
+
+                                if statut == "Payé en totalité":
+                                    avance_initiale = total_vente
+                                elif statut == "Avance reçue":
+                                    avance_initiale = total_vente * 0.5   # ou demander un champ dédié
+                                else:
+                                    avance_initiale = 0.
                             with conn.cursor() as cur:
                                 cur.execute("""
                                     INSERT INTO ventes 
                                     (date_vente, client_nom, id_magasin, id_client, quantite_kg, prix_unitaire,
                                     montant_total, total, statut_paiement, termes_paiement, statut_livraison,
-                                    incoterm, port_embarquement, port_dechargement, devise) 
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'En attente d''expédition', %s, %s, %s, %s)
+                                    incoterm, port_embarquement, port_dechargement, devise, montant_avance) 
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'En attente d''expédition', %s, %s, %s, %s, %s)
                                     RETURNING id
                                 """, (date_now, nom_c, id_m, id_c, qte, pu, total_vente, total_vente,
-                                      statut, termes_paiement, incoterm, port_depart, port_arrivee, devise_app))
+                                      statut, termes_paiement, incoterm, port_depart, port_arrivee, devise_app, avance_initiale))
                     
                                 id_vente = cur.fetchone()[0]
                     
@@ -4069,6 +4083,90 @@ elif choix == "🛍️ Ventes (Sorties)":
                             )
                         except Exception as ex_gen:
                             st.error(f"❌ Erreur lors de la génération du PDF : {ex_gen}")              
+    # ==========================================
+    # TAB 3 : RÈGLEMENT CLIENT
+    # ==========================================
+    with tab3:
+        st.markdown("### 💸 Guichet de Règlement Client")
+    
+        ventes_dues = fetch_all("""
+            SELECT v.id, v.client_nom, v.devise, v.total,
+                   COALESCE(v.montant_avance, 0) AS avance,
+                   (v.total - COALESCE(v.montant_avance, 0)) AS reste,
+                   v.statut_paiement
+            FROM ventes v
+            WHERE COALESCE(v.montant_avance, 0) < v.total
+              AND v.statut_paiement != 'Payé en totalité'
+            ORDER BY v.id DESC
+        """)
+    
+        if not ventes_dues:
+            st.success("🎉 Aucune vente en attente de règlement.")
+        else:
+            dict_ventes_dues = {
+                f"INV-{v[0]:04d} | {v[1]} | Reste: {v[4]:,.0f} {v[2]}": v
+                for v in ventes_dues
+            }
+    
+            with st.form("form_reglement_client", clear_on_submit=True):
+                choix_v = st.selectbox("Sélectionner la vente", list(dict_ventes_dues.keys()))
+                v = dict_ventes_dues[choix_v]
+                id_vente, client_nom, devise, total, avance, reste, statut_actuel = v
+    
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Total facturé", f"{total:,.0f} {devise}")
+                c2.metric("Déjà encaissé", f"{avance:,.0f} {devise}")
+                c3.metric("Reste à payer", f"{reste:,.0f} {devise}")
+    
+                montant = st.number_input(
+                    "Montant encaissé aujourd'hui",
+                    min_value=0.0,
+                    max_value=float(reste),
+                    step=5000.0
+                )
+                date_p = st.date_input("Date d'encaissement", value=date.today())
+                mode = st.selectbox("Mode de paiement",
+                                    ["Virement bancaire", "Espèces", "Chèque", "Mobile Money"])
+    
+                submit = st.form_submit_button("✅ Enregistrer le paiement",
+                                               type="primary",
+                                               use_container_width=True)
+    
+                if submit:
+                    if montant <= 0:
+                        st.error("❌ Le montant doit être supérieur à 0.")
+                    else:
+                        nouvelle_avance = avance + montant
+                        nouveau_reste = total - nouvelle_avance
+                        nouveau_statut = ("Payé en totalité"
+                                          if nouveau_reste <= 0.01
+                                          else "Avance reçue")
+    
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                UPDATE ventes
+                                SET montant_avance = %s,
+                                    statut_paiement = %s
+                                WHERE id = %s
+                            """, (nouvelle_avance, nouveau_statut, id_vente))
+    
+                            ref = f"ENC-{id_vente}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            cur.execute("""
+                                INSERT INTO documents_generes
+                                    (type_doc, reference, montant, demandeur,
+                                     description, statut)
+                                VALUES (%s, %s, %s, %s, %s, 'EN_ATTENTE')
+                            """, ('reglement_client', ref, montant,
+                                  st.session_state.get('username', 'Agent'),
+                                  f"Encaissement {client_nom} - INV-{id_vente:04d} "
+                                  f"({montant:,.0f} {devise} via {mode})"))
+                            conn.commit()
+    
+                        log_action(f"Encaissement client {montant:,.0f} {devise} "
+                                   f"pour vente N°{id_vente} ({ref})")
+                        st.success(f"✅ Paiement de {montant:,.0f} {devise} enregistré ! "
+                                   f"Reste dû : {nouveau_reste:,.0f} {devise}")
+                        st.rerun()
 
 if choix == "🤝 Fournisseurs":
     st.title("🤝 Répertoire des Fournisseurs")
