@@ -3879,12 +3879,14 @@ elif choix == "🛍️ Ventes (Sorties)":
                             total_vente = qte * pu
                             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                                if statut == "Payé en totalité":
-                                    avance_initiale = total_vente
-                                elif statut == "Avance reçue":
-                                    avance_initiale = total_vente * 0.5   # ou demander un champ dédié
-                                else:
-                                    avance_initiale = 0.
+
+                            if statut == "Payé en totalité":
+                                avance_initiale = total_vente
+                            elif statut == "Avance reçue":
+                                avance_initiale = total_vente * 0.5   # ou demander un champ dédié
+                            else:
+                                avance_initiale = 0.0
+                                
                             with conn.cursor() as cur:
                                 cur.execute("""
                                     INSERT INTO ventes 
