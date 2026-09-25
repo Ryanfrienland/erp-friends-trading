@@ -364,12 +364,44 @@ def convertir_df_excel(df):
     return output.getvalue()
 
 def _clean_text(text):
-    """Nettoie et sécurise les chaînes pour éviter les crashs d'encodage FPDF standard."""
+    """
+    Nettoie et sécurise les chaînes pour éviter les crashs d'encodage FPDF.
+    Remplace tous les caractères typographiques Unicode par leurs
+    équivalents ASCII/latin-1.
+    """
+    if text is None:
+        return ""
     if not isinstance(text, str):
-        return str(text)
-    text = text.replace("•", "-")
+        text = str(text)
+
+    # Tirets et espaces typographiques
+    text = text.replace("\u2014", "-")   # — em-dash
+    text = text.replace("\u2013", "-")   # – en-dash
+    text = text.replace("\u2012", "-")   # ‒ figure dash
+    text = text.replace("\u2015", "-")   # ― horizontal bar
+    text = text.replace("\u2212", "-")   # − signe moins
+    text = text.replace("\u00A0", " ")   # espace insécable
+    text = text.replace("\u202F", " ")   # espace fine insécable
+
+    # Apostrophes et guillemets
     text = text.replace("\u2019", "'").replace("\u2018", "'")
-    text = text.replace("\u201c", '"').replace("\u201d", '"')
+    text = text.replace("\u201C", '"').replace("\u201D", '"')
+    text = text.replace("\u00AB", '"').replace("\u00BB", '"')  # « »
+
+    # Puces et symboles divers
+    text = text.replace("•", "-")
+    text = text.replace("\u2026", "...")   # …
+    text = text.replace("\u20AC", "EUR")   # €
+    text = text.replace("\u00B0", " deg")  # °
+
+    # Emojis : tout retirer (FPDF ne les gère pas)
+    # On les remplace par rien plutôt que de planter
+    text = re.sub(
+        r"[\U00010000-\U0010FFFF]",
+        "",
+        text
+    )
+
     return text
 
 def telecharger_pdf_puis_supprimer(fichier_ou_bytes, label, nom_fichier_export="Document.pdf"):
