@@ -4741,12 +4741,14 @@ elif choix == "🛍️ Ventes (Sorties)":
         else:
             st.info("Aucune vente enregistrée pour le moment.")
 
+    
     # =================================================================
     # ONGLET 3 : RÈGLEMENT CLIENT
     # =================================================================
     with tab3:
-        st.markdown("### 💸 Guichet de Règlement Client")
-
+        st.markdown("### 💸 Guichet d'Encaissement Client")
+        st.caption("ℹ️ Un encaissement est une écriture de trésorerie : il est enregistré directement, sans validation Direction.")
+    
         ventes_dues = fetch_all("""
             SELECT v.id, v.client_nom, v.devise, v.total,
                    COALESCE(v.montant_avance, 0) AS avance,
@@ -4757,7 +4759,7 @@ elif choix == "🛍️ Ventes (Sorties)":
               AND v.statut_paiement != 'Payé en totalité'
             ORDER BY v.id DESC
         """)
-
+    
         if not ventes_dues:
             st.success("🎉 Aucune vente en attente de règlement.")
         else:
@@ -4765,23 +4767,23 @@ elif choix == "🛍️ Ventes (Sorties)":
                 f"INV-{v[0]:04d} | {v[1]} | Reste: {v[5]:,.0f} {v[2]}": v
                 for v in ventes_dues
             }
-
+    
             with st.form("form_reglement_client", clear_on_submit=True):
                 choix_v = st.selectbox("Sélectionner la vente", list(dict_ventes_dues.keys()))
                 v = dict_ventes_dues[choix_v]
-            
+    
                 id_vente, client_nom, devise, total, avance, reste, statut_actuel, po = v
-            
-                # ✅ Conversion explicite en float pour éviter Decimal + float
+    
+                # ✅ Conversion explicite en float
                 total  = float(total or 0.0)
                 avance = float(avance or 0.0)
                 reste  = float(reste or 0.0)
-            
+    
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Total facturé",   f"{total:,.0f} {devise}")
                 c2.metric("Déjà encaissé",   f"{avance:,.0f} {devise}")
                 c3.metric("Reste à payer",   f"{reste:,.0f} {devise}")
-            
+    
                 montant = st.number_input(
                     "Montant encaissé",
                     min_value=0.0,
@@ -4790,33 +4792,37 @@ elif choix == "🛍️ Ventes (Sorties)":
                 )
                 date_p = st.date_input("Date d'encaissement", value=date.today())
                 mode = st.selectbox("Mode", ["Virement bancaire", "Espèces", "Chèque", "Mobile Money"])
-            
-                if st.form_submit_button("✅ Enregistrer", type="primary", use_container_width=True):
+                reference_virement = st.text_input(
+                    "Référence bancaire / N° de chèque (optionnel)",
+                    placeholder="Ex: VIR-2026-0045"
+                )
+    
+                if st.form_submit_button("✅ Enregistrer l'encaissement", type="primary", use_container_width=True):
                     if montant <= 0:
                         st.error("❌ Montant invalide.")
                     else:
-                        # ✅ Ici tous les opérandes sont des float
                         nouvelle_avance = avance + float(montant)
                         nouveau_reste   = total - nouvelle_avance
                         nouveau_statut  = "Payé en totalité" if nouveau_reste <= 0.01 else "Avance reçue"
-            
+    
+                        # ✅ Mise à jour directe : pas de document_generes, pas de validation Direction
                         with conn.cursor() as cur:
                             cur.execute(
                                 "UPDATE ventes SET montant_avance = %s, statut_paiement = %s WHERE id = %s",
                                 (nouvelle_avance, nouveau_statut, id_vente)
                             )
-            
-                            ref = f"ENC-{id_vente}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                            cur.execute("""
-                                INSERT INTO documents_generes (type_doc, reference, montant, demandeur, description, statut)
-                                VALUES (%s, %s, %s, %s, %s, 'EN_ATTENTE')
-                            """, ('reglement_client', ref, montant,
-                                  st.session_state.get('username', 'Agent'),
-                                  f"Encaissement {client_nom} - INV-{id_vente:04d} ({montant:,.0f} {devise} via {mode})"))
                             conn.commit()
-            
-                        log_action(f"Encaissement {montant:,.0f} {devise} vente N°{id_vente}")
-                        st.success(f"✅ Paiement enregistré ! Reste : {nouveau_reste:,.0f} {devise}")
+    
+                        ref_bancaire = f" [{reference_virement}]" if reference_virement else ""
+                        log_action(
+                            f"Encaissement {montant:,.0f} {devise} — Vente INV-{id_vente:04d} "
+                            f"({client_nom}) via {mode}{ref_bancaire}"
+                        )
+    
+                        st.success(
+                            f"✅ Encaissement de {montant:,.0f} {devise} enregistré ! "
+                            f"Reste dû : {nouveau_reste:,.0f} {devise}"
+                        )
                         st.rerun()
 
 if choix == "🤝 Fournisseurs":
