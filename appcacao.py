@@ -3749,6 +3749,9 @@ elif choix == "🧾 Achats (Entrees)":
                 infos_dette = dict_dettes[dette_selectionnee]
                 id_achat, fourn_nom, lot_concerne = infos_dette[0], infos_dette[1], infos_dette[2]
                 total_net_dette, avance_actuelle, reste_a_payer_actuel = infos_dette[3], infos_dette[4], infos_dette[5]
+                total_net_dette        = float(total_net_dette or 0.0)
+                avance_actuelle        = float(avance_actuelle or 0.0)
+                reste_a_payer_actuel   = float(reste_a_payer_actuel or 0.0)
 
                 st.markdown("---")
                 m1, m2, m3 = st.columns(3)
@@ -3788,13 +3791,17 @@ elif choix == "🧾 Achats (Entrees)":
                     elif montant_regle > reste_a_payer_actuel:
                         st.error(f"❌ Le montant saisi ({montant_regle:,.0f} FCFA) dépasse le reste à payer ({reste_a_payer_actuel:,.0f} FCFA).")
                     else:
-                        nouvelle_avance = avance_actuelle + montant_regle
-                        nouveau_reste = total_net_dette - nouvelle_avance
-                        nouveau_statut = "Paye" if nouveau_reste <= 0.1 else "Avance"
-
+                        # ✅ Un seul calcul, tout en float
+                        nouvelle_avance = avance_actuelle + float(montant_regle)
+                        nouveau_reste   = total_net_dette - nouvelle_avance
+                        nouveau_statut  = "Paye" if nouveau_reste <= 0.1 else "Avance"
+                
                         with conn.cursor() as cur:
-                            cur.execute("UPDATE achats SET montant_avance = %s, statut = %s WHERE id = %s",
-                                        (nouvelle_avance, nouveau_statut, id_achat))
+                            cur.execute(
+                                "UPDATE achats SET montant_avance = %s, statut = %s WHERE id = %s",
+                                (nouvelle_avance, nouveau_statut, id_achat)
+                            )
+                            # ... reste inchangé
 
                             ref_reglement = f"REG-{id_achat}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                             cur.execute("""
@@ -4684,30 +4691,43 @@ elif choix == "🛍️ Ventes (Sorties)":
             with st.form("form_reglement_client", clear_on_submit=True):
                 choix_v = st.selectbox("Sélectionner la vente", list(dict_ventes_dues.keys()))
                 v = dict_ventes_dues[choix_v]
+            
                 id_vente, client_nom, devise, total, avance, reste, statut_actuel, po = v
-
+            
+                # ✅ Conversion explicite en float pour éviter Decimal + float
+                total  = float(total or 0.0)
+                avance = float(avance or 0.0)
+                reste  = float(reste or 0.0)
+            
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Total facturé", f"{total:,.0f} {devise}")
-                c2.metric("Déjà encaissé", f"{avance:,.0f} {devise}")
-                c3.metric("Reste à payer", f"{reste:,.0f} {devise}")
-
-                montant = st.number_input("Montant encaissé", min_value=0.0, max_value=float(reste), step=5000.0)
+                c1.metric("Total facturé",   f"{total:,.0f} {devise}")
+                c2.metric("Déjà encaissé",   f"{avance:,.0f} {devise}")
+                c3.metric("Reste à payer",   f"{reste:,.0f} {devise}")
+            
+                montant = st.number_input(
+                    "Montant encaissé",
+                    min_value=0.0,
+                    max_value=float(reste),
+                    step=5000.0
+                )
                 date_p = st.date_input("Date d'encaissement", value=date.today())
                 mode = st.selectbox("Mode", ["Virement bancaire", "Espèces", "Chèque", "Mobile Money"])
-
+            
                 if st.form_submit_button("✅ Enregistrer", type="primary", use_container_width=True):
                     if montant <= 0:
                         st.error("❌ Montant invalide.")
                     else:
-                        nouvelle_avance = avance + montant
-                        nouveau_reste = total - nouvelle_avance
-                        nouveau_statut = "Payé en totalité" if nouveau_reste <= 0.01 else "Avance reçue"
-
+                        # ✅ Ici tous les opérandes sont des float
+                        nouvelle_avance = avance + float(montant)
+                        nouveau_reste   = total - nouvelle_avance
+                        nouveau_statut  = "Payé en totalité" if nouveau_reste <= 0.01 else "Avance reçue"
+            
                         with conn.cursor() as cur:
-                            cur.execute("""
-                                UPDATE ventes SET montant_avance = %s, statut_paiement = %s WHERE id = %s
-                            """, (nouvelle_avance, nouveau_statut, id_vente))
-
+                            cur.execute(
+                                "UPDATE ventes SET montant_avance = %s, statut_paiement = %s WHERE id = %s",
+                                (nouvelle_avance, nouveau_statut, id_vente)
+                            )
+            
                             ref = f"ENC-{id_vente}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                             cur.execute("""
                                 INSERT INTO documents_generes (type_doc, reference, montant, demandeur, description, statut)
@@ -4716,7 +4736,7 @@ elif choix == "🛍️ Ventes (Sorties)":
                                   st.session_state.get('username', 'Agent'),
                                   f"Encaissement {client_nom} - INV-{id_vente:04d} ({montant:,.0f} {devise} via {mode})"))
                             conn.commit()
-
+            
                         log_action(f"Encaissement {montant:,.0f} {devise} vente N°{id_vente}")
                         st.success(f"✅ Paiement enregistré ! Reste : {nouveau_reste:,.0f} {devise}")
                         st.rerun()
