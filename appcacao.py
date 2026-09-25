@@ -362,7 +362,53 @@ def convertir_df_excel(df):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Donnees')
     return output.getvalue()
+# =========================================================
+# 🛡️ PATCH GLOBAL FPDF — Immunité totale contre les erreurs
+# de caractères non-latin-1 (—, –, ', ", …, emojis...)
+# =========================================================
+def _sanitize_for_fpdf(txt):
+    if txt is None:
+        return ""
+    if not isinstance(txt, str):
+        return str(txt)
+    txt = (txt
+        .replace("\u2014", "-")   # —
+        .replace("\u2013", "-")   # –
+        .replace("\u2012", "-")
+        .replace("\u2015", "-")
+        .replace("\u2212", "-")
+        .replace("\u2019", "'")   # ’
+        .replace("\u2018", "'")
+        .replace("\u201C", '"')   # “
+        .replace("\u201D", '"')
+        .replace("\u2026", "...") # …
+        .replace("\u00A0", " ")
+        .replace("\u202F", " ")
+        .replace("\u20AC", "EUR")
+        .replace("•", "-")
+    )
+    # Filet de sécurité ULTIME : tout caractère hors latin-1 → "?"
+    txt = txt.encode("latin-1", "replace").decode("latin-1")
+    return txt
 
+_orig_cell       = FPDF.cell
+_orig_multi_cell = FPDF.multi_cell
+_orig_write      = FPDF.write
+
+def _patched_cell(self, w, h=0, txt="", *args, **kwargs):
+    return _orig_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+
+def _patched_multi_cell(self, w, h, txt="", *args, **kwargs):
+    return _orig_multi_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+
+def _patched_write(self, h, txt="", *args, **kwargs):
+    return _orig_write(self, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+
+FPDF.cell       = _patched_cell
+FPDF.multi_cell = _patched_multi_cell
+FPDF.write      = _patched_write
+# =========================================================
+    
 def _clean_text(text):
     """
     Nettoie et sécurise les chaînes pour éviter les crashs d'encodage FPDF.
