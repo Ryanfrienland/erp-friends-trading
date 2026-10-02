@@ -365,69 +365,73 @@ def convertir_df_excel(df):
 # =========================================================
 # 🛡️ PATCH GLOBAL FPDF — Immunité totale contre les erreurs
 # de caractères non-latin-1 (—, –, ', ", …, emojis...)
+# + protection anti-récursion (fpdf2 s'appelle en interne)
 # =========================================================
+import threading
+
 def _sanitize_for_fpdf(txt):
     if txt is None:
         return ""
     if not isinstance(txt, str):
         return str(txt)
     txt = (txt
-        .replace("\u2014", "-")   # —
-        .replace("\u2013", "-")   # –
+        .replace("\u2014", "-")
+        .replace("\u2013", "-")
         .replace("\u2012", "-")
         .replace("\u2015", "-")
         .replace("\u2212", "-")
-        .replace("\u2019", "'")   # ’
+        .replace("\u2019", "'")
         .replace("\u2018", "'")
-        .replace("\u201C", '"')   # “
+        .replace("\u201C", '"')
         .replace("\u201D", '"')
-        .replace("\u2026", "...") # …
+        .replace("\u2026", "...")
         .replace("\u00A0", " ")
         .replace("\u202F", " ")
         .replace("\u20AC", "EUR")
         .replace("•", "-")
     )
-    # Filet de sécurité ULTIME : tout caractère hors latin-1 → "?"
     txt = txt.encode("latin-1", "replace").decode("latin-1")
     return txt
 
+# Sauvegarde des méthodes originales AVANT tout remplacement
 _orig_cell       = FPDF.cell
 _orig_multi_cell = FPDF.multi_cell
 _orig_write      = FPDF.write
 
-def _patched_cell(self, w, h=0, txt="", *args, **kwargs):
-    return _orig_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-
-def _patched_multi_cell(self, w, h, txt="", *args, **kwargs):
-    return _orig_multi_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-
-def _patched_write(self, h, txt="", *args, **kwargs):
-    return _orig_write(self, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-
-FPDF.cell       = _patched_cell
-FPDF.multi_cell = _patched_multi_cell
-FPDF.write      = _patched_write
-# =========================================================
-
-import threading
-
+# Flags "par thread" pour empêcher la ré-entrance interne de fpdf2
 _pdf_patch_local = threading.local()
 
-_orig_multi_cell = fpdf.FPDF.multi_cell   # ou pdf.FPDF.multi_cell, selon ton import
+def _patched_cell(self, w, h=0, txt="", *args, **kwargs):
+    if getattr(_pdf_patch_local, "in_cell", False):
+        return _orig_cell(self, w, h, txt, *args, **kwargs)
+    _pdf_patch_local.in_cell = True
+    try:
+        return _orig_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+    finally:
+        _pdf_patch_local.in_cell = False
 
 def _patched_multi_cell(self, w, h, txt="", *args, **kwargs):
-    # Si on est déjà dans le patch (appel récursif interne de fpdf2),
-    # on laisse passer sans re-sanitiser.
     if getattr(_pdf_patch_local, "in_multi_cell", False):
         return _orig_multi_cell(self, w, h, txt, *args, **kwargs)
-
     _pdf_patch_local.in_multi_cell = True
     try:
         return _orig_multi_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
     finally:
         _pdf_patch_local.in_multi_cell = False
 
-fpdf.FPDF.multi_cell = _patched_multi_cell
+def _patched_write(self, h, txt="", *args, **kwargs):
+    if getattr(_pdf_patch_local, "in_write", False):
+        return _orig_write(self, h, txt, *args, **kwargs)
+    _pdf_patch_local.in_write = True
+    try:
+        return _orig_write(self, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+    finally:
+        _pdf_patch_local.in_write = False
+
+FPDF.cell       = _patched_cell
+FPDF.multi_cell = _patched_multi_cell
+FPDF.write      = _patched_write
+# =========================================================
 
 def _clean_text(text):
     """
