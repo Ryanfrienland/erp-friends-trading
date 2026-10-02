@@ -408,7 +408,27 @@ FPDF.cell       = _patched_cell
 FPDF.multi_cell = _patched_multi_cell
 FPDF.write      = _patched_write
 # =========================================================
-    
+
+import threading
+
+_pdf_patch_local = threading.local()
+
+_orig_multi_cell = fpdf.FPDF.multi_cell   # ou pdf.FPDF.multi_cell, selon ton import
+
+def _patched_multi_cell(self, w, h, txt="", *args, **kwargs):
+    # Si on est déjà dans le patch (appel récursif interne de fpdf2),
+    # on laisse passer sans re-sanitiser.
+    if getattr(_pdf_patch_local, "in_multi_cell", False):
+        return _orig_multi_cell(self, w, h, txt, *args, **kwargs)
+
+    _pdf_patch_local.in_multi_cell = True
+    try:
+        return _orig_multi_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+    finally:
+        _pdf_patch_local.in_multi_cell = False
+
+fpdf.FPDF.multi_cell = _patched_multi_cell
+
 def _clean_text(text):
     """
     Nettoie et sécurise les chaînes pour éviter les crashs d'encodage FPDF.
