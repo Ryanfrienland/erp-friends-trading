@@ -6072,15 +6072,7 @@ elif choix == "📝 Contrats":
                         "doivent être supérieurs à 0."
                     )
                     st.stop()
-        
-                # Suite de ton traitement...
 
-            termes = " ".join(str(termes).split())   # ← ajouter cette ligne
-            
-            st.write("")
-            submit = st.form_submit_button("✅ Enregistrer & Générer le Contrat", use_container_width=True, type="primary")
-
-            if submit:
                 if not termes or not str(termes).strip():
                     st.error("❌ Veuillez renseigner les termes de paiement (modèle ou saisie manuelle).")
                     st.stop()
