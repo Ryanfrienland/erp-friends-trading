@@ -6000,7 +6000,14 @@ elif choix == "📝 Contrats":
         magasins_enregistres = fetch_all("SELECT nom FROM magasins")
         lieux_disponibles = [m[0] for m in magasins_enregistres] if magasins_enregistres else ["Douala-PAD-SOGECAF", "Douala"]
 
-        termes_paie = ["100% Livraison", "Avance 50% / 50% Livraison", "Avance 80% / 20% Livraison", "100% à la signature"]
+        # Dans le TAB 1 de l'onglet Contrats, juste avant `with st.form("form_contrat", border=True):`
+        termes_paie = [
+            "100% Livraison",
+            "Avance 50% / 50% Livraison",
+            "Avance 80% / 20% Livraison",
+            "100% à la signature",
+            "Autre (saisie manuelle)",
+        ]
 
         with st.form("form_contrat", border=True):
             st.subheader("📋 1. Informations Générales")
@@ -6023,12 +6030,29 @@ elif choix == "📝 Contrats":
             lieu = col3.selectbox("📍 Lieu de livraison", lieux_disponibles)
             provenance = col4.text_input("🌍 Provenance du cacao (ex: Sud, Centre...)")
             
-            termes = st.selectbox("💳 Termes de Paiement", termes_paie)
+            termes_choix = st.selectbox("💳 Termes de Paiement (modèle)", termes_paie)
+
+            if termes_choix == "Autre (saisie manuelle)":
+                termes = st.text_area(
+                    "✍️ Saisir les termes de paiement *",
+                    placeholder=(
+                        "Ex: Avance 40% à la signature, 40% à la livraison en magasin, "
+                        "20% à 30 jours après réception du bordereau d'analyse."
+                    ),
+                    height=100,
+                    key="termes_manuels_contrat",
+                    help="Ces termes seront repris tels quels dans le PDF du contrat."
+                )
+            else:
+                termes = termes_choix
 
             st.write("")
             submit = st.form_submit_button("✅ Enregistrer & Générer le Contrat", use_container_width=True, type="primary")
 
             if submit:
+                if not termes or not str(termes).strip():
+                    st.error("❌ Veuillez renseigner les termes de paiement (modèle ou saisie manuelle).")
+                    st.stop()
                 if qte <= 0 or pu <= 0:
                     st.error("❌ La quantité prévue et le prix unitaire doivent être supérieurs à 0.")
                 else:
