@@ -363,9 +363,7 @@ def convertir_df_excel(df):
         df.to_excel(writer, index=False, sheet_name='Donnees')
     return output.getvalue()
 # =========================================================
-# 🛡️ PATCH GLOBAL FPDF — Immunité totale contre les erreurs
-# de caractères non-latin-1 (—, –, ', ", …, emojis...)
-# + protection anti-récursion (fpdf2 s'appelle en interne)
+# 🛡️ PATCH GLOBAL FPDF — version IDEMPOTENTE (safe Streamlit)
 # =========================================================
 import threading
 
@@ -375,62 +373,62 @@ def _sanitize_for_fpdf(txt):
     if not isinstance(txt, str):
         return str(txt)
     txt = (txt
-        .replace("\u2014", "-")
-        .replace("\u2013", "-")
-        .replace("\u2012", "-")
-        .replace("\u2015", "-")
+        .replace("\u2014", "-").replace("\u2013", "-")
+        .replace("\u2012", "-").replace("\u2015", "-")
         .replace("\u2212", "-")
-        .replace("\u2019", "'")
-        .replace("\u2018", "'")
-        .replace("\u201C", '"')
-        .replace("\u201D", '"')
+        .replace("\u2019", "'").replace("\u2018", "'")
+        .replace("\u201C", '"').replace("\u201D", '"')
         .replace("\u2026", "...")
-        .replace("\u00A0", " ")
-        .replace("\u202F", " ")
+        .replace("\u00A0", " ").replace("\u202F", " ")
         .replace("\u20AC", "EUR")
         .replace("•", "-")
     )
-    txt = txt.encode("latin-1", "replace").decode("latin-1")
-    return txt
+    return txt.encode("latin-1", "replace").decode("latin-1")
 
-# Sauvegarde des méthodes originales AVANT tout remplacement
-_orig_cell       = FPDF.cell
-_orig_multi_cell = FPDF.multi_cell
-_orig_write      = FPDF.write
 
-# Flags "par thread" pour empêcher la ré-entrance interne de fpdf2
-_pdf_patch_local = threading.local()
+# ⚠️ GARDE ANTI-EMPILEMENT : on ne patche qu'UNE SEULE FOIS,
+# même si Streamlit re-exécute tout le script à chaque interaction.
+if not getattr(FPDF, "_erp_patched", False):
 
-def _patched_cell(self, w, h=0, txt="", *args, **kwargs):
-    if getattr(_pdf_patch_local, "in_cell", False):
-        return _orig_cell(self, w, h, txt, *args, **kwargs)
-    _pdf_patch_local.in_cell = True
-    try:
-        return _orig_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-    finally:
-        _pdf_patch_local.in_cell = False
+    _orig_cell       = FPDF.cell
+    _orig_multi_cell = FPDF.multi_cell
+    _orig_write      = FPDF.write
 
-def _patched_multi_cell(self, w, h, txt="", *args, **kwargs):
-    if getattr(_pdf_patch_local, "in_multi_cell", False):
-        return _orig_multi_cell(self, w, h, txt, *args, **kwargs)
-    _pdf_patch_local.in_multi_cell = True
-    try:
-        return _orig_multi_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-    finally:
-        _pdf_patch_local.in_multi_cell = False
+    _pdf_patch_local = threading.local()
 
-def _patched_write(self, h, txt="", *args, **kwargs):
-    if getattr(_pdf_patch_local, "in_write", False):
-        return _orig_write(self, h, txt, *args, **kwargs)
-    _pdf_patch_local.in_write = True
-    try:
-        return _orig_write(self, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-    finally:
-        _pdf_patch_local.in_write = False
+    def _patched_cell(self, w, h=0, txt="", *args, **kwargs):
+        if getattr(_pdf_patch_local, "in_cell", False):
+            return _orig_cell(self, w, h, txt, *args, **kwargs)
+        _pdf_patch_local.in_cell = True
+        try:
+            return _orig_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+        finally:
+            _pdf_patch_local.in_cell = False
 
-FPDF.cell       = _patched_cell
-FPDF.multi_cell = _patched_multi_cell
-FPDF.write      = _patched_write
+    def _patched_multi_cell(self, w, h, txt="", *args, **kwargs):
+        if getattr(_pdf_patch_local, "in_multi_cell", False):
+            return _orig_multi_cell(self, w, h, txt, *args, **kwargs)
+        _pdf_patch_local.in_multi_cell = True
+        try:
+            return _orig_multi_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+        finally:
+            _pdf_patch_local.in_multi_cell = False
+
+    def _patched_write(self, h, txt="", *args, **kwargs):
+        if getattr(_pdf_patch_local, "in_write", False):
+            return _orig_write(self, h, txt, *args, **kwargs)
+        _pdf_patch_local.in_write = True
+        try:
+            return _orig_write(self, h, _sanitize_for_fpdf(txt), *args, **kwargs)
+        finally:
+            _pdf_patch_local.in_write = False
+
+    FPDF.cell       = _patched_cell
+    FPDF.multi_cell = _patched_multi_cell
+    FPDF.write      = _patched_write
+
+    # Marqueur : on ne repassera plus jamais ici, même après un rerun Streamlit
+    FPDF._erp_patched = True
 # =========================================================
 
 def _clean_text(text):
