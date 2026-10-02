@@ -6046,6 +6046,8 @@ elif choix == "📝 Contrats":
             else:
                 termes = termes_choix
 
+            termes = " ".join(str(termes).split())   # ← ajouter cette ligne
+            
             st.write("")
             submit = st.form_submit_button("✅ Enregistrer & Générer le Contrat", use_container_width=True, type="primary")
 
