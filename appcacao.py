@@ -385,52 +385,6 @@ def _sanitize_for_fpdf(txt):
     )
     return txt.encode("latin-1", "replace").decode("latin-1")
 
-
-# ⚠️ GARDE ANTI-EMPILEMENT : on ne patche qu'UNE SEULE FOIS,
-# même si Streamlit re-exécute tout le script à chaque interaction.
-if not getattr(FPDF, "_erp_patched", False):
-
-    _orig_cell       = FPDF.cell
-    _orig_multi_cell = FPDF.multi_cell
-    _orig_write      = FPDF.write
-
-    _pdf_patch_local = threading.local()
-
-    def _patched_cell(self, w, h=0, txt="", *args, **kwargs):
-        if getattr(_pdf_patch_local, "in_cell", False):
-            return _orig_cell(self, w, h, txt, *args, **kwargs)
-        _pdf_patch_local.in_cell = True
-        try:
-            return _orig_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-        finally:
-            _pdf_patch_local.in_cell = False
-
-    def _patched_multi_cell(self, w, h, txt="", *args, **kwargs):
-        if getattr(_pdf_patch_local, "in_multi_cell", False):
-            return _orig_multi_cell(self, w, h, txt, *args, **kwargs)
-        _pdf_patch_local.in_multi_cell = True
-        try:
-            return _orig_multi_cell(self, w, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-        finally:
-            _pdf_patch_local.in_multi_cell = False
-
-    def _patched_write(self, h, txt="", *args, **kwargs):
-        if getattr(_pdf_patch_local, "in_write", False):
-            return _orig_write(self, h, txt, *args, **kwargs)
-        _pdf_patch_local.in_write = True
-        try:
-            return _orig_write(self, h, _sanitize_for_fpdf(txt), *args, **kwargs)
-        finally:
-            _pdf_patch_local.in_write = False
-
-    FPDF.cell       = _patched_cell
-    FPDF.multi_cell = _patched_multi_cell
-    FPDF.write      = _patched_write
-
-    # Marqueur : on ne repassera plus jamais ici, même après un rerun Streamlit
-    FPDF._erp_patched = True
-# =========================================================
-
 def _clean_text(text):
     """
     Nettoie et sécurise les chaînes pour éviter les crashs d'encodage FPDF.
@@ -1735,18 +1689,21 @@ def generer_contrat_pdf(
         ),
     ]
     
-    # CORRECTION 1 : L'indentation a été corrigée pour être DANS la boucle.
+    # =========================================================
+    # 6. CLAUSES ET CONDITIONS
+    # =========================================================
+    
     for clause in clauses:
         texte_clause = _clean_text(clause)
-        # Estimation du nombre de lignes que va occuper la clause
-        nb_lignes = pdf.multi_cell(0, 5, texte_clause, align="J", dry_run=True, output="LINES")
-        hauteur_estimee = len(nb_lignes) * 5 + 2  # +2 pour le pdf.ln(2) qui suit
-
-        # Si le bloc ne rentre pas dans l'espace restant avant la marge de bas de page, on saute
-        if pdf.get_y() + hauteur_estimee > (pdf.h - pdf.b_margin):
-            pdf.add_page()
-
-        pdf.multi_cell(0, 5, texte_clause, align="J")
+    
+        # FPDF gère automatiquement le passage à la page suivante
+        # grâce à set_auto_page_break(auto=True, margin=30).
+        pdf.multi_cell(
+            0,
+            5,
+            texte_clause,
+            align="J"
+        )
         pdf.ln(2)
     
     pdf.set_font("Times", "B", 10)
