@@ -414,7 +414,7 @@ def _clean_text(text):
     text = text.replace("•", "-")
     text = text.replace("\u2026", "...")   # …
     text = text.replace("\u20AC", "EUR")   # €
-    text = text.replace("\u00B0", " deg")  # °
+    text = text.replace("\u00B0", "°")   # conserver le symbole °
 
     # Emojis : tout retirer (FPDF ne les gère pas)
     # On les remplace par rien plutôt que de planter
@@ -5955,7 +5955,8 @@ elif choix == "📝 Contrats":
         magasins_enregistres = fetch_all("SELECT nom FROM magasins")
         lieux_disponibles = [m[0] for m in magasins_enregistres] if magasins_enregistres else ["Douala-PAD-SOGECAF", "Douala"]
 
-        # Dans le TAB 1 de l'onglet Contrats, juste avant `with st.form("form_contrat", border=True):`
+        # Dans le TAB 1 de l'onglet Contrats, juste avant `with st.form("form_contrat", border=True):
+        
         termes_paie = [
             "100% Livraison",
             "Avance 50% / 50% Livraison",
@@ -5963,43 +5964,116 @@ elif choix == "📝 Contrats":
             "100% à la signature",
             "Autre (saisie manuelle)",
         ]
-
+        
+        termes_choix = st.selectbox(
+            "💳 Termes de Paiement (modèle)",
+            termes_paie,
+            key="termes_choix_contrat"
+        )
+        
+        if termes_choix == "Autre (saisie manuelle)":
+            termes_saisi = st.text_area(
+                "✍️ Saisir les termes de paiement *",
+                placeholder=(
+                    "Ex: Avance 40% à la signature, 40% à la livraison en magasin, "
+                    "20% à 30 jours après réception du bordereau d'analyse."
+                ),
+                height=100,
+                key="termes_manuels_contrat",
+                help="Ces termes seront repris tels quels dans le PDF du contrat."
+            )
+        else:
+            termes_saisi = ""
+        
+        termes = (
+            termes_saisi.strip()
+            if termes_choix == "Autre (saisie manuelle)"
+            else termes_choix
+        )
+        
+        # ============================================================
+        # FORMULAIRE CONTRAT
+        # ============================================================
+        
         with st.form("form_contrat", border=True):
+        
             st.subheader("📋 1. Informations Générales")
+        
             col1, col2 = st.columns(2)
-            
-            f_nom = col1.selectbox("🏢 Fournisseur", list(dict_f.keys()))
-            col2.text_input("N° Contrat (Automatique)", value=num_c_auto, disabled=True)
-            
-            date_c = col1.date_input("📅 Date de signature", value=date.today())
-            date_delai = col2.date_input("🚨 Date limite (Échéance)", value=date.today() + timedelta(days=30))
-
+        
+            f_nom = col1.selectbox(
+                "🏢 Fournisseur",
+                list(dict_f.keys())
+            )
+        
+            col2.text_input(
+                "N° Contrat (Automatique)",
+                value=num_c_auto,
+                disabled=True
+            )
+        
+            date_c = col1.date_input(
+                "📅 Date de signature",
+                value=date.today()
+            )
+        
+            date_delai = col2.date_input(
+                "🚨 Date limite (Échéance)",
+                value=date.today() + timedelta(days=30)
+            )
+        
             st.divider()
-
+        
             st.subheader("💰 2. Logistique & Finances")
+        
             col3, col4 = st.columns(2)
-            
-            qte = col3.number_input("⚖️ Quantité prévue (kg)", 0.0, step=500.0)
-            pu = col4.number_input("💵 Prix unitaire (FCFA/kg)", 0.0, step=50.0)
-            
-            lieu = col3.selectbox("📍 Lieu de livraison", lieux_disponibles)
-            provenance = col4.text_input("🌍 Provenance du cacao (ex: Sud, Centre...)")
-            
-            termes_choix = st.selectbox("💳 Termes de Paiement (modèle)", termes_paie)
-
-            if termes_choix == "Autre (saisie manuelle)":
-                termes = st.text_area(
-                    "✍️ Saisir les termes de paiement *",
-                    placeholder=(
-                        "Ex: Avance 40% à la signature, 40% à la livraison en magasin, "
-                        "20% à 30 jours après réception du bordereau d'analyse."
-                    ),
-                    height=100,
-                    key="termes_manuels_contrat",
-                    help="Ces termes seront repris tels quels dans le PDF du contrat."
-                )
-            else:
-                termes = termes_choix
+        
+            qte = col3.number_input(
+                "⚖️ Quantité prévue (kg)",
+                0.0,
+                step=500.0
+            )
+        
+            pu = col4.number_input(
+                "💵 Prix unitaire (FCFA/kg)",
+                0.0,
+                step=50.0
+            )
+        
+            lieu = col3.selectbox(
+                "📍 Lieu de livraison",
+                lieux_disponibles
+            )
+        
+            provenance = col4.text_input(
+                "🌍 Provenance du cacao (ex: Sud, Centre...)"
+            )
+        
+            st.write("")
+        
+            submit = st.form_submit_button(
+                "✅ Enregistrer & Générer le Contrat",
+                use_container_width=True,
+                type="primary"
+            )
+        
+            if submit:
+        
+                if not termes or not str(termes).strip():
+                    st.error(
+                        "❌ Veuillez renseigner les termes de paiement "
+                        "(modèle ou saisie manuelle)."
+                    )
+                    st.stop()
+        
+                if qte <= 0 or pu <= 0:
+                    st.error(
+                        "❌ La quantité prévue et le prix unitaire "
+                        "doivent être supérieurs à 0."
+                    )
+                    st.stop()
+        
+                # Suite de ton traitement...
 
             termes = " ".join(str(termes).split())   # ← ajouter cette ligne
             
