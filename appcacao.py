@@ -6921,13 +6921,36 @@ elif choix == "🏪 Magasins":
                             if not new_nom:
                                 st.error("❌ Le nom ne peut pas être vide.")
                             else:
-                                with conn.cursor() as cur:
-                                    cur.execute("""
-                                        UPDATE magasins SET nom = %s, emplacement = %s, capacite_kg = %s, responsable = %s WHERE id = %s
-                                    """, (new_nom, new_empl, new_cap, new_resp, id_selectionne))
-                                    conn.commit()
-                                st.toast("✅ Mise à jour effectuée.", icon="👍")
-                                st.rerun()
+                                try:
+                                    with conn.cursor() as cur:
+                        
+                                        # 1. Récupérer l'ancien nom
+                                        cur.execute("SELECT nom FROM magasins WHERE id = %s", (id_selectionne,))
+                                        row = cur.fetchone()
+                                        ancien_nom = row[0] if row else None
+                        
+                                        # 2. Mettre à jour les références dans la table stock AVANT magasins
+                                        if ancien_nom and ancien_nom != new_nom:
+                                            cur.execute(
+                                                "UPDATE stock SET magasin_destination = %s WHERE magasin_destination = %s",
+                                                (new_nom, ancien_nom)
+                                            )
+                        
+                                        # 3. Mettre à jour le magasin lui-même
+                                        cur.execute("""
+                                            UPDATE magasins 
+                                            SET nom = %s, emplacement = %s, capacite_kg = %s, responsable = %s 
+                                            WHERE id = %s
+                                        """, (new_nom, new_empl, new_cap, new_resp, id_selectionne))
+                        
+                                        conn.commit()
+                        
+                                    st.toast("✅ Mise à jour effectuée.", icon="👍")
+                                    st.rerun()
+                        
+                                except Exception as e:
+                                    conn.rollback()
+                                    st.error(f"❌ Erreur lors de la mise à jour : {e}")
                                 
                         if btn_supprimer:
                             with conn.cursor() as cur:
