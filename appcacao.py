@@ -6929,19 +6929,52 @@ elif choix == "🏪 Magasins":
                                         row = cur.fetchone()
                                         ancien_nom = row[0] if row else None
                         
-                                        # 2. Mettre à jour les références dans la table stock AVANT magasins
                                         if ancien_nom and ancien_nom != new_nom:
+                                            # =========================================================
+                                            # RENOMMAGE : il faut désactiver la FK le temps de l'opération
+                                            # =========================================================
+                        
+                                            # Étape A : supprimer la contrainte (instantané)
                                             cur.execute(
-                                                "UPDATE stock SET magasin_destination = %s WHERE magasin_destination = %s",
+                                                "ALTER TABLE stock "
+                                                "DROP CONSTRAINT IF EXISTS stock_magasin_destination_fkey"
+                                            )
+                        
+                                            # Étape B : mettre à jour les références dans stock
+                                            cur.execute(
+                                                "UPDATE stock SET magasin_destination = %s "
+                                                "WHERE magasin_destination = %s",
                                                 (new_nom, ancien_nom)
                                             )
                         
-                                        # 3. Mettre à jour le magasin lui-même
-                                        cur.execute("""
-                                            UPDATE magasins 
-                                            SET nom = %s, emplacement = %s, capacite_kg = %s, responsable = %s 
-                                            WHERE id = %s
-                                        """, (new_nom, new_empl, new_cap, new_resp, id_selectionne))
+                                            # Étape C : mettre à jour le magasin
+                                            cur.execute("""
+                                                UPDATE magasins
+                                                SET nom = %s, emplacement = %s,
+                                                    capacite_kg = %s, responsable = %s
+                                                WHERE id = %s
+                                            """, (new_nom, new_empl, new_cap, new_resp, id_selectionne))
+                        
+                                            # Étape D : recréer la contrainte avec ON UPDATE CASCADE
+                                            #            + NOT VALID (pas de scan de la table = pas de timeout)
+                                            cur.execute("""
+                                                ALTER TABLE stock
+                                                ADD CONSTRAINT stock_magasin_destination_fkey
+                                                FOREIGN KEY (magasin_destination)
+                                                REFERENCES magasins(nom)
+                                                ON UPDATE CASCADE
+                                                ON DELETE RESTRICT
+                                                NOT VALID
+                                            """)
+                        
+                                        else:
+                                            # Pas de changement de nom → simple update
+                                            cur.execute("""
+                                                UPDATE magasins
+                                                SET nom = %s, emplacement = %s,
+                                                    capacite_kg = %s, responsable = %s
+                                                WHERE id = %s
+                                            """, (new_nom, new_empl, new_cap, new_resp, id_selectionne))
                         
                                         conn.commit()
                         
