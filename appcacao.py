@@ -2693,6 +2693,7 @@ with st.sidebar:
     ONGLETS_DISPONIBLES = [
         "🏠 Tableau de Bord",
         "📦 Mouvements de Stock",
+        "🎒 Mouvements de Sacs", 
         "🧾 Achats (Entrees)",
         "🛍️ Ventes (Sorties)",
         "👥 Clients",
@@ -6367,7 +6368,730 @@ elif choix == "📝 Contrats":
                             st.error("❌ Erreur lors de la génération du brouillon.")
         else:
             st.info("Aucun contrat dans l'historique.")       
-
+# ==============================================================================
+# MODULE GESTION DES SACS DE JUTE
+# ==============================================================================
+elif choix == "🎒 Mouvements de Sacs":
+    
+    # ---------------------------------------------------------
+    # EN-TÊTE
+    # ---------------------------------------------------------
+    st.title("🎒 Gestion des Sacs de Jute")
+    st.caption("Suivi des sacs NEUF (export) et BROUSSIN (tout venant) — Entrées, transferts, exports, casses et inventaires.")
+    st.divider()
+    
+    # ---------------------------------------------------------
+    # FONCTIONS UTILITAIRES
+    # ---------------------------------------------------------
+    def get_stock_sacs(id_magasin=None, code_sac=None):
+        """Retourne le stock de sacs (global ou filtré)."""
+        query = """
+            SELECT COALESCE(SUM(quantite), 0)
+            FROM mouvements_sacs
+            WHERE 1=1
+        """
+        params = []
+        if id_magasin is not None:
+            query += " AND id_magasin = %s"
+            params.append(id_magasin)
+        if code_sac is not None:
+            query += " AND code_sac = %s"
+            params.append(code_sac)
+        return get_single_value_raw(query, tuple(params) if params else None)
+    
+    def get_single_value_raw(query, params=None):
+        """Variante de get_single_value avec paramètres."""
+        with conn.cursor() as cur:
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
+            row = cur.fetchone()
+            return row[0] if row and row[0] is not None else 0
+    
+    def generer_reference_mouvement():
+        """Génère un UUID court pour lier les 2 lignes d'un transfert."""
+        import uuid
+        return str(uuid.uuid4())[:8].upper()
+    
+    # ---------------------------------------------------------
+    # RÉCUPÉRATION DES DONNÉES DE BASE
+    # ---------------------------------------------------------
+    types_sacs_db = fetch_all("""
+        SELECT code, libelle, categorie, seuil_alerte, actif
+        FROM types_sacs
+        WHERE actif = TRUE
+        ORDER BY categorie, code
+    """)
+    dict_types_sacs = {t[0]: {"libelle": t[1], "categorie": t[2], "seuil": t[3]} for t in types_sacs_db}
+    
+    magasins_db = fetch_all("SELECT id, nom FROM magasins ORDER BY nom")
+    dict_magasins = {m[0]: m[1] for m in magasins_db}
+    dict_magasins_inv = {m[1]: m[0] for m in magasins_db}
+    
+    if not dict_types_sacs or not dict_magasins:
+        st.error("❌ Configurez au moins un type de sac et un magasin avant de continuer.")
+        st.stop()
+    
+    # ---------------------------------------------------------
+    # 4 SOUS-ONGLETS
+    # ---------------------------------------------------------
+    sub1, sub2, sub3, sub4 = st.tabs([
+        "➕ Saisie d'un Mouvement",
+        "📊 État des Stocks",
+        "📜 Journal Complet",
+        "🔢 Inventaire Physique"
+    ])
+    
+    # =====================================================================
+    # SOUS-ONGLET 1 : SAISIE D'UN MOUVEMENT
+    # =====================================================================
+    with sub1:
+        st.markdown("### ➕ Enregistrer un mouvement de sacs")
+        
+        type_flux = st.radio(
+            "Type d'opération",
+            ["💰 Achat / Approvisionnement", 
+             "🔄 Transfert entre Magasins",
+             "🚢 Export (Sortie)",
+             "💥 Casse",
+             "🕳️ Perte",
+             "♻️ Réforme"],
+            horizontal=False,
+            key="sac_type_flux"
+        )
+        
+        with st.form("form_mouvement_sac", clear_on_submit=True):
+            
+            # ============ CHAMPS COMMUNS ============
+            c1, c2 = st.columns(2)
+            with c1:
+                code_sac_choisi = st.selectbox(
+                    "🏷️ Type de sac *",
+                    list(dict_types_sacs.keys()),
+                    format_func=lambda c: f"{dict_types_sacs[c]['libelle']} [{dict_types_sacs[c]['categorie']}]"
+                )
+            with c2:
+                magasin_choisi = st.selectbox(
+                    "🏢 Magasin concerné *",
+                    list(dict_magasins.keys()),
+                    format_func=lambda i: dict_magasins[i]
+                )
+            
+            # ============ CHAMPS SPÉCIFIQUES ============
+            
+            # ----- ACHAT -----
+            if type_flux == "💰 Achat / Approvisionnement":
+                st.info("💡 Enregistrement d'un approvisionnement en sacs vides (stock initial ou réapprovisionnement).")
+                c3, c4 = st.columns(2)
+                quantite = c3.number_input("Quantité (nombre de sacs) *", min_value=1, step=1, key="sac_qte_achat")
+                prix_unit = c4.number_input("Prix unitaire (FCFA)", min_value=0.0, step=100.0, value=0.0, key="sac_pu_achat")
+                numero_camion = st.text_input("N° Camion / Bon de livraison", key="sac_camion_achat")
+                motif = st.text_area("Observations", height=60, key="sac_motif_achat")
+            
+            # ----- TRANSFERT -----
+            elif type_flux == "🔄 Transfert entre Magasins":
+                st.info("💡 Le stock sera débité du magasin source et crédité au magasin destination (2 écritures liées).")
+                magasin_dest_id = st.selectbox(
+                    "🏢 Magasin de destination *",
+                    [mid for mid in dict_magasins.keys() if mid != magasin_choisi],
+                    format_func=lambda i: dict_magasins[i]
+                )
+                stock_source = get_stock_sacs(id_magasin=magasin_choisi, code_sac=code_sac_choisi)
+                st.caption(f"📊 Stock actuel du magasin source : **{stock_source}** sacs")
+                c3, c4 = st.columns(2)
+                quantite = c3.number_input(
+                    "Quantité à transférer *",
+                    min_value=1,
+                    max_value=max(1, stock_source),
+                    step=1,
+                    key="sac_qte_transfert"
+                )
+                numero_camion = c4.text_input("N° Camion / Transporteur", key="sac_camion_transfert")
+                motif = st.text_area("Observations", height=60, key="sac_motif_transfert")
+            
+            # ----- EXPORT -----
+            elif type_flux == "🚢 Export (Sortie)":
+                st.info("💡 Sortie définitive des sacs (vendus avec la marchandise à l'export). Le prix est imputé dans la facture client.")
+                stock_dispo = get_stock_sacs(id_magasin=magasin_choisi, code_sac=code_sac_choisi)
+                st.caption(f"📊 Stock actuel : **{stock_dispo}** sacs")
+                
+                # Sélection de la vente liée
+                ventes_en_cours = fetch_all("""
+                    SELECT v.id, v.client_nom, v.numero_commande_client, v.poids_net
+                    FROM ventes v
+                    WHERE v.statut_livraison IN ('En attente d''expédition', 'Livré')
+                    ORDER BY v.id DESC LIMIT 100
+                """)
+                if ventes_en_cours:
+                    dict_ventes = {
+                        v[0]: f"INV-{v[0]:04d} | {v[1]} | P.O. {v[2] or 'N/A'} | {v[3]:,.0f} kg"
+                        for v in ventes_en_cours
+                    }
+                    id_vente_lie = st.selectbox(
+                        "🔗 Vente liée (optionnel)",
+                        [None] + list(dict_ventes.keys()),
+                        format_func=lambda x: "— Aucune —" if x is None else dict_ventes[x]
+                    )
+                else:
+                    id_vente_lie = None
+                    st.warning("Aucune vente récente trouvée.")
+                
+                c3, c4 = st.columns(2)
+                quantite = c3.number_input(
+                    "Quantité de sacs exportés *",
+                    min_value=1,
+                    max_value=max(1, stock_dispo),
+                    step=1,
+                    key="sac_qte_export"
+                )
+                numero_camion = c4.text_input("N° Camion", key="sac_camion_export")
+                numero_lot = st.text_input("N° Lot concerné", key="sac_lot_export")
+                motif = st.text_area("Observations", height=60, key="sac_motif_export")
+            
+            # ----- CASSE / PERTE / REFORME -----
+            else:
+                if type_flux == "💥 Casse":
+                    message = "💥 Sacs déchirés, inutilisables suite à un accident."
+                elif type_flux == "🕳️ Perte":
+                    message = "🕳️ Sacs disparus (vol, intempérie, transport)."
+                else:
+                    message = "♻️ Sacs retirés définitivement du service (usure, qualité insuffisante)."
+                st.warning(message)
+                
+                stock_dispo = get_stock_sacs(id_magasin=magasin_choisi, code_sac=code_sac_choisi)
+                st.caption(f"📊 Stock actuel : **{stock_dispo}** sacs")
+                
+                c3, c4 = st.columns(2)
+                quantite = c3.number_input(
+                    "Quantité *",
+                    min_value=1,
+                    max_value=max(1, stock_dispo),
+                    step=1,
+                    key=f"sac_qte_{type_flux[:5]}"
+                )
+                numero_camion = c4.text_input("N° Camion (si pertinent)", key=f"sac_camion_{type_flux[:5]}")
+                
+                motif = st.text_area(
+                    "📝 Motif obligatoire *",
+                    height=80,
+                    placeholder="Détaillez la raison (ex: camion accidenté, contrôle qualité, etc.)",
+                    key=f"sac_motif_{type_flux[:5]}"
+                )
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_mouvement = st.form_submit_button(
+                "✅ Enregistrer le mouvement",
+                type="primary",
+                use_container_width=True
+            )
+            
+            # ============ TRAITEMENT ============
+            if submit_mouvement:
+                
+                # Validations
+                erreur = None
+                if type_flux in ["💥 Casse", "🕳️ Perte", "♻️ Réforme"] and (not motif or not motif.strip()):
+                    erreur = "❌ Le motif est obligatoire pour ce type de mouvement."
+                elif "quantite" in dir() and quantite <= 0:
+                    erreur = "❌ La quantité doit être supérieure à 0."
+                elif type_flux != "💰 Achat / Approvisionnement":
+                    stock_check = get_stock_sacs(id_magasin=magasin_choisi, code_sac=code_sac_choisi)
+                    if stock_check < quantite:
+                        erreur = f"❌ Stock insuffisant dans **{dict_magasins[magasin_choisi]}** : {stock_check} sacs disponibles, {quantite} demandés."
+                
+                if erreur:
+                    st.error(erreur)
+                else:
+                    try:
+                        date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        utilisateur = st.session_state.get('username', 'Agent')
+                        
+                        with conn.cursor() as cur:
+                            
+                            # ---- ACHAT ----
+                            if type_flux == "💰 Achat / Approvisionnement":
+                                cur.execute("""
+                                    INSERT INTO mouvements_sacs
+                                    (date, type_mouvement, code_sac, quantite, id_magasin,
+                                     numero_camion, motif, utilisateur)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                """, (
+                                    date_now, 'ACHAT', code_sac_choisi, quantite, magasin_choisi,
+                                    numero_camion or None, motif or f"Achat de {quantite} sacs",
+                                    utilisateur
+                                ))
+                                log_action(f"🎒 ACHAT sacs : +{quantite} {code_sac_choisi} → {dict_magasins[magasin_choisi]}")
+                            
+                            # ---- TRANSFERT (2 lignes) ----
+                            elif type_flux == "🔄 Transfert entre Magasins":
+                                ref = generer_reference_mouvement()
+                                # Ligne 1 : sortie du magasin source
+                                cur.execute("""
+                                    INSERT INTO mouvements_sacs
+                                    (date, type_mouvement, code_sac, quantite, id_magasin,
+                                     reference_mouvement, numero_camion, motif, utilisateur)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """, (
+                                    date_now, 'TRANSFERT_SORTIE', code_sac_choisi, -quantite, magasin_choisi,
+                                    ref, numero_camion or None,
+                                    f"Transfert vers {dict_magasins[magasin_dest_id]} - {motif or ''}",
+                                    utilisateur
+                                ))
+                                # Ligne 2 : entrée dans le magasin destination
+                                cur.execute("""
+                                    INSERT INTO mouvements_sacs
+                                    (date, type_mouvement, code_sac, quantite, id_magasin,
+                                     reference_mouvement, numero_camion, motif, utilisateur)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """, (
+                                    date_now, 'TRANSFERT_ENTREE', code_sac_choisi, quantite, magasin_dest_id,
+                                    ref, numero_camion or None,
+                                    f"Transfert depuis {dict_magasins[magasin_choisi]} - {motif or ''}",
+                                    utilisateur
+                                ))
+                                log_action(f"🎒 TRANSFERT sacs : {quantite} {code_sac_choisi} de {dict_magasins[magasin_choisi]} → {dict_magasins[magasin_dest_id]} (réf {ref})")
+                            
+                            # ---- EXPORT ----
+                            elif type_flux == "🚢 Export (Sortie)":
+                                cur.execute("""
+                                    INSERT INTO mouvements_sacs
+                                    (date, type_mouvement, code_sac, quantite, id_magasin,
+                                     id_vente, numero_camion, numero_lot, motif, utilisateur)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """, (
+                                    date_now, 'EXPORT', code_sac_choisi, -quantite, magasin_choisi,
+                                    id_vente_lie, numero_camion or None, numero_lot or None,
+                                    motif or f"Export de {quantite} sacs",
+                                    utilisateur
+                                ))
+                                log_action(f"🎒 EXPORT sacs : -{quantite} {code_sac_choisi} depuis {dict_magasins[magasin_choisi]}")
+                            
+                            # ---- CASSE / PERTE / REFORME ----
+                            else:
+                                type_code = {"💥 Casse": "CASSE", "🕳️ Perte": "PERTE", "♻️ Réforme": "REFORME"}[type_flux]
+                                cur.execute("""
+                                    INSERT INTO mouvements_sacs
+                                    (date, type_mouvement, code_sac, quantite, id_magasin,
+                                     numero_camion, motif, utilisateur)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                """, (
+                                    date_now, type_code, code_sac_choisi, -quantite, magasin_choisi,
+                                    numero_camion or None, motif.strip(),
+                                    utilisateur
+                                ))
+                                log_action(f"🎒 {type_code} sacs : -{quantite} {code_sac_choisi} à {dict_magasins[magasin_choisi]} — {motif[:50]}")
+                        
+                        conn.commit()
+                        st.success(f"✅ Mouvement **{type_flux}** enregistré avec succès !")
+                        st.balloons()
+                        st.rerun()
+                    
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"❌ Erreur lors de l'enregistrement : {e}")
+    
+    
+    # =====================================================================
+    # SOUS-ONGLET 2 : ÉTAT DES STOCKS
+    # =====================================================================
+    with sub2:
+        st.markdown("### 📊 État des stocks de sacs")
+        
+        # Calcul global
+        stock_global_neuf = get_stock_sacs(code_sac="SAC_NEUF_60")
+        stock_global_broussin = get_stock_sacs(code_sac="SAC_BROUSSIN_60")
+        
+        # KPI globaux
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            with st.container(border=True):
+                st.markdown(f"""
+                    <div style="text-align:center;">
+                        <div style="font-size:14px; color:#94a3b8; letter-spacing:1px;">🟢 SACS NEUF (EXPORT)</div>
+                        <div style="font-size:42px; font-weight:800; color:#10b981; margin:8px 0;">{stock_global_neuf:,}</div>
+                        <div style="font-size:12px; color:#64748b;">Total global tous magasins</div>
+                    </div>
+                """, unsafe_allow_html=True)
+        with col_g2:
+            with st.container(border=True):
+                st.markdown(f"""
+                    <div style="text-align:center;">
+                        <div style="font-size:14px; color:#94a3b8; letter-spacing:1px;">🟤 SACS BROUSSIN (TV)</div>
+                        <div style="font-size:42px; font-weight:800; color:#d97706; margin:8px 0;">{stock_global_broussin:,}</div>
+                        <div style="font-size:12px; color:#64748b;">Total global tous magasins</div>
+                    </div>
+                """, unsafe_allow_html=True)
+        
+        st.divider()
+        
+        # Détail par magasin
+        st.markdown("#### 🏢 Détail par magasin")
+        
+        df_stock_magasin = get_dataframe_from_query("""
+            SELECT 
+                m.id AS id_magasin,
+                m.nom AS Magasin,
+                COALESCE(SUM(CASE WHEN ms.code_sac = 'SAC_NEUF_60' THEN ms.quantite ELSE 0 END), 0) AS "Sacs Neuf",
+                COALESCE(SUM(CASE WHEN ms.code_sac = 'SAC_BROUSSIN_60' THEN ms.quantite ELSE 0 END), 0) AS "Sacs Broussin",
+                COALESCE(SUM(ms.quantite), 0) AS "Total"
+            FROM magasins m
+            LEFT JOIN mouvements_sacs ms ON ms.id_magasin = m.id
+            GROUP BY m.id, m.nom
+            ORDER BY m.nom
+        """)
+        
+        if df_stock_magasin.empty:
+            st.info("Aucun magasin enregistré.")
+        else:
+            for _, row in df_stock_magasin.iterrows():
+                stock_neuf = int(row['Sacs Neuf'])
+                stock_broussin = int(row['Sacs Broussin'])
+                seuil_neuf = dict_types_sacs.get("SAC_NEUF_60", {}).get("seuil", 380)
+                
+                # Statut couleur
+                if stock_neuf <= seuil_neuf:
+                    statut_color = "#ef4444"
+                    statut_icon = "🔴"
+                    statut_txt = f"CRITIQUE (seuil : {seuil_neuf})"
+                elif stock_neuf <= seuil_neuf * 2:
+                    statut_color = "#f59e0b"
+                    statut_icon = "🟡"
+                    statut_txt = f"Vigilance (seuil : {seuil_neuf})"
+                else:
+                    statut_color = "#10b981"
+                    statut_icon = "🟢"
+                    statut_txt = f"OK (seuil : {seuil_neuf})"
+                
+                with st.container(border=True):
+                    cc1, cc2, cc3, cc4 = st.columns([2, 1, 1, 2])
+                    with cc1:
+                        st.markdown(f"**🏢 {row['Magasin']}**")
+                    with cc2:
+                        st.markdown(
+                            f"<div style='text-align:center;'>"
+                            f"<div style='font-size:11px; color:#64748b;'>NEUF</div>"
+                            f"<div style='font-size:22px; font-weight:700; color:#10b981;'>{stock_neuf:,}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                    with cc3:
+                        st.markdown(
+                            f"<div style='text-align:center;'>"
+                            f"<div style='font-size:11px; color:#64748b;'>BROUSSIN</div>"
+                            f"<div style='font-size:22px; font-weight:700; color:#d97706;'>{stock_broussin:,}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                    with cc4:
+                        st.markdown(
+                            f"<div style='text-align:right; color:{statut_color}; font-weight:600; font-size:13px;'>"
+                            f"{statut_icon} {statut_txt}"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+            
+            # Bouton d'export
+            st.markdown("<br>", unsafe_allow_html=True)
+            col_exp1, col_exp2 = st.columns(2)
+            with col_exp1:
+                st.download_button(
+                    "📥 Exporter CSV",
+                    df_stock_magasin.to_csv(index=False).encode('utf-8'),
+                    f"stock_sacs_{datetime.now().strftime('%Y%m%d')}.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+        
+        st.divider()
+        
+        # Graphique d'évolution 30j
+        st.markdown("#### 📈 Évolution des mouvements (30 derniers jours)")
+        
+        df_evol = get_dataframe_from_query("""
+            SELECT 
+                DATE(date) AS jour,
+                COALESCE(SUM(CASE WHEN quantite > 0 THEN quantite ELSE 0 END), 0) AS entrees,
+                COALESCE(SUM(CASE WHEN quantite < 0 THEN -quantite ELSE 0 END), 0) AS sorties
+            FROM mouvements_sacs
+            WHERE date >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY DATE(date)
+            ORDER BY DATE(date)
+        """)
+        
+        if not df_evol.empty:
+            fig_sacs = go.Figure()
+            fig_sacs.add_trace(go.Bar(
+                x=df_evol['jour'], y=df_evol['entrees'],
+                name="Entrées", marker_color="#10b981"
+            ))
+            fig_sacs.add_trace(go.Bar(
+                x=df_evol['jour'], y=-df_evol['sorties'],
+                name="Sorties", marker_color="#ef4444"
+            ))
+            fig_sacs.update_layout(
+                barmode='relative',
+                template="plotly_white",
+                height=350,
+                margin=dict(l=20, r=20, t=30, b=20),
+                xaxis_title="Date",
+                yaxis_title="Nombre de sacs",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_sacs, use_container_width=True, key="graph_sacs_evolution")
+        else:
+            st.info("Aucun mouvement sur les 30 derniers jours.")
+    
+    
+    # =====================================================================
+    # SOUS-ONGLET 3 : JOURNAL COMPLET
+    # =====================================================================
+    with sub3:
+        st.markdown("### 📜 Journal des mouvements de sacs")
+        
+        # Filtres
+        with st.container(border=True):
+            f1, f2, f3, f4 = st.columns(4)
+            with f1:
+                filtre_magasin = st.selectbox(
+                    "🏢 Magasin",
+                    ["Tous"] + list(dict_magasins.values()),
+                    key="filtre_journal_magasin"
+                )
+            with f2:
+                filtre_code = st.selectbox(
+                    "🏷️ Type de sac",
+                    ["Tous"] + list(dict_types_sacs.keys()),
+                    format_func=lambda c: "Tous" if c == "Tous" else dict_types_sacs[c]['libelle'],
+                    key="filtre_journal_code"
+                )
+            with f3:
+                types_disponibles = [
+                    "ACHAT", "TRANSFERT_SORTIE", "TRANSFERT_ENTREE",
+                    "EXPORT", "CASSE", "PERTE", "REFORME",
+                    "INVENTAIRE_PLUS", "INVENTAIRE_MOINS"
+                ]
+                filtre_type = st.selectbox(
+                    "⚙️ Type mouvement",
+                    ["Tous"] + types_disponibles,
+                    key="filtre_journal_type"
+                )
+            with f4:
+                filtre_periode = st.date_input(
+                    "📅 Période",
+                    value=(date.today() - timedelta(days=30), date.today()),
+                    key="filtre_journal_periode"
+                )
+        
+        # Construction de la requête
+        query_journal = """
+            SELECT 
+                ms.id,
+                TO_CHAR(ms.date, 'DD/MM/YYYY HH24:MI') AS "Date",
+                ms.type_mouvement AS "Type",
+                ms.code_sac AS "Sac",
+                ms.quantite AS "Quantité",
+                m.nom AS "Magasin",
+                ms.numero_camion AS "Camion",
+                ms.numero_lot AS "Lot",
+                ms.motif AS "Motif",
+                ms.utilisateur AS "Utilisateur"
+            FROM mouvements_sacs ms
+            JOIN magasins m ON ms.id_magasin = m.id
+            WHERE 1=1
+        """
+        params_journal = []
+        
+        if filtre_magasin != "Tous":
+            query_journal += " AND m.nom = %s"
+            params_journal.append(filtre_magasin)
+        if filtre_code != "Tous":
+            query_journal += " AND ms.code_sac = %s"
+            params_journal.append(filtre_code)
+        if filtre_type != "Tous":
+            query_journal += " AND ms.type_mouvement = %s"
+            params_journal.append(filtre_type)
+        if isinstance(filtre_periode, tuple) and len(filtre_periode) == 2:
+            start_d, end_d = filtre_periode
+            query_journal += " AND ms.date >= %s AND ms.date <= %s"
+            params_journal.extend([
+                start_d.strftime("%Y-%m-%d 00:00:00"),
+                end_d.strftime("%Y-%m-%d 23:59:59")
+            ])
+        
+        query_journal += " ORDER BY ms.date DESC LIMIT 500"
+        
+        df_journal = get_dataframe_from_query(query_journal, params_journal)
+        
+        if df_journal.empty:
+            st.info("Aucun mouvement trouvé pour ces critères.")
+        else:
+            # Métriques
+            total_entrees = df_journal[df_journal["Quantité"] > 0]["Quantité"].sum()
+            total_sorties = abs(df_journal[df_journal["Quantité"] < 0]["Quantité"].sum())
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("📊 Mouvements", len(df_journal))
+            m2.metric("➕ Entrées", f"{int(total_entrees):,} sacs")
+            m3.metric("➖ Sorties", f"{int(total_sorties):,} sacs")
+            
+            # Tableau avec coloration
+            st.dataframe(
+                df_journal,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Quantité": st.column_config.NumberColumn(
+                        "Quantité",
+                        format="%d",
+                        help="Positif = entrée, Négatif = sortie"
+                    ),
+                    "Sac": st.column_config.TextColumn("Type de sac", width="small"),
+                    "Date": st.column_config.TextColumn("Date", width="small"),
+                }
+            )
+            
+            # Export
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                st.download_button(
+                    "📥 Exporter le journal (CSV)",
+                    df_journal.to_csv(index=False).encode('utf-8'),
+                    f"journal_sacs_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+            with col_e2:
+                try:
+                    st.download_button(
+                        "📥 Exporter (Excel)",
+                        convertir_df_excel(df_journal),
+                        f"journal_sacs_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                except NameError:
+                    pass
+    
+    
+    # =====================================================================
+    # SOUS-ONGLET 4 : INVENTAIRE PHYSIQUE
+    # =====================================================================
+    with sub4:
+        st.markdown("### 🔢 Inventaire physique des sacs")
+        st.caption("Comparez le stock théorique (issu des mouvements) avec le stock physique compté sur le terrain.")
+        
+        with st.container(border=True):
+            inv_c1, inv_c2 = st.columns(2)
+            with inv_c1:
+                inv_magasin = st.selectbox(
+                    "🏢 Magasin à inventorier *",
+                    list(dict_magasins.keys()),
+                    format_func=lambda i: dict_magasins[i],
+                    key="inv_magasin"
+                )
+            with inv_c2:
+                inv_code = st.selectbox(
+                    "🏷️ Type de sac *",
+                    list(dict_types_sacs.keys()),
+                    format_func=lambda c: dict_types_sacs[c]['libelle'],
+                    key="inv_code"
+                )
+            
+            # Calcul du stock théorique
+            stock_theorique = get_stock_sacs(id_magasin=inv_magasin, code_sac=inv_code)
+            
+            st.markdown("---")
+            info1, info2 = st.columns(2)
+            with info1:
+                st.metric("📚 Stock Théorique (base ERP)", f"{stock_theorique} sacs")
+            with info2:
+                stock_physique = st.number_input(
+                    "🔍 Stock Physique (compté) *",
+                    min_value=0,
+                    value=int(stock_theorique),
+                    step=1,
+                    key="inv_stock_physique"
+                )
+            
+            ecart = stock_physique - stock_theorique
+            if ecart == 0:
+                st.success(f"✅ Aucun écart — Le stock théorique correspond au physique ({stock_theorique} sacs).")
+            elif ecart > 0:
+                st.warning(f"⚠️ Écart POSITIF : **+{ecart}** sacs (stock physique > théorique)")
+            else:
+                st.error(f"⚠️ Écart NÉGATIF : **{ecart}** sacs (stock physique < théorique)")
+            
+            # Motif obligatoire si écart
+            motif_inventaire = ""
+            if ecart != 0:
+                motif_inventaire = st.text_area(
+                    "📝 Motif de l'ajustement *",
+                    placeholder="Expliquez la cause de l'écart (erreur de saisie, perte non enregistrée, etc.)",
+                    height=80,
+                    key="inv_motif"
+                )
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            valider_inv = st.button(
+                "✅ Valider et Ajuster le Stock",
+                type="primary",
+                use_container_width=True,
+                disabled=(ecart == 0),
+                key="btn_valider_inventaire"
+            )
+            
+            if valider_inv:
+                if not motif_inventaire.strip():
+                    st.error("❌ Veuillez renseigner le motif de l'ajustement.")
+                else:
+                    try:
+                        date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        utilisateur = st.session_state.get('username', 'Agent')
+                        type_ajust = 'INVENTAIRE_PLUS' if ecart > 0 else 'INVENTAIRE_MOINS'
+                        
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                INSERT INTO mouvements_sacs
+                                (date, type_mouvement, code_sac, quantite, id_magasin, motif, utilisateur)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            """, (
+                                date_now, type_ajust, inv_code, ecart, inv_magasin,
+                                f"Inventaire physique ({stock_physique} sacs) — {motif_inventaire.strip()}",
+                                utilisateur
+                            ))
+                            conn.commit()
+                        
+                        log_action(f"🎒 INVENTAIRE sacs : {dict_magasins[inv_magasin]} — {inv_code} → {ecart:+d} sacs — {motif_inventaire[:50]}")
+                        st.success(f"✅ Inventaire validé ! Stock ajusté de **{ecart:+d}** sacs.")
+                        st.rerun()
+                    
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"❌ Erreur lors de l'inventaire : {e}")
+        
+        # Historique des inventaires
+        st.divider()
+        st.markdown("#### 📜 Historique des derniers inventaires")
+        
+        df_inv = get_dataframe_from_query("""
+            SELECT 
+                TO_CHAR(date, 'DD/MM/YYYY HH24:MI') AS "Date",
+                m.nom AS "Magasin",
+                code_sac AS "Sac",
+                quantite AS "Ajustement",
+                motif AS "Motif",
+                utilisateur AS "Opérateur"
+            FROM mouvements_sacs
+            WHERE type_mouvement IN ('INVENTAIRE_PLUS', 'INVENTAIRE_MOINS')
+            ORDER BY date DESC LIMIT 20
+        """)
+        
+        if df_inv.empty:
+            st.info("Aucun inventaire enregistré.")
+        else:
+            st.dataframe(df_inv, use_container_width=True, hide_index=True)
+            
 elif choix == "🏪 Magasins":
     # En-tête stylisé
     st.markdown("<h1 style='text-align: center; color: #8B4513;'>🏭 Centre Logistique & Entrepôts</h1>", unsafe_allow_html=True)
@@ -8453,6 +9177,7 @@ elif choix == "⚙️ Administration & Backup":
         ONGLETS_DISPONIBLES = [
             "🏠 Tableau de Bord",
             "📦 Mouvements de Stock",
+            "🎒 Mouvements de Sacs", 
             "🧾 Achats (Entrees)",
             "🛍️ Ventes (Sorties)",
             "👥 Clients",
