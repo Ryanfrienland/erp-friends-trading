@@ -2647,53 +2647,230 @@ def insert_dict(cursor, table, data):
     row = cursor.fetchone()
     return row[0] if row else None
 
-# ==========================================
-# 6. MENU LATÉRAL DYNAMIQUE (RBAC)
-# ==========================================
 with st.sidebar:
-    # --- En-tête utilisateur ---
+    # ==============================================================
+    # STYLES DU MENU LATÉRAL
+    # ==============================================================
+    st.markdown("""
+    <style>
+        /* Fond dégradé du sidebar */
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0B1120 0%, #0F172A 55%, #111827 100%);
+            border-right: 1px solid rgba(148, 163, 184, 0.08);
+        }
+
+        section[data-testid="stSidebar"] > div:first-child {
+            padding-top: 1.2rem;
+        }
+
+        /* ============ BRAND / LOGO ============ */
+        .brand-block {
+            text-align: center;
+            padding: 4px 0 14px 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.10);
+            margin-bottom: 16px;
+        }
+        .brand-title {
+            font-size: 15px;
+            font-weight: 800;
+            color: #F8FAFC;
+            letter-spacing: 0.4px;
+            margin-top: 4px;
+        }
+        .brand-sub {
+            font-size: 10px;
+            color: #64748B;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+
+        /* ============ CARTE UTILISATEUR ============ */
+        .user-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px;
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.95) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            border-radius: 14px;
+            margin-bottom: 14px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.03);
+        }
+        .user-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #6366F1, #8B5CF6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 16px;
+            color: #FFFFFF;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+            flex-shrink: 0;
+        }
+        .user-info { min-width: 0; flex: 1; }
+        .user-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: #F8FAFC;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .user-role {
+            font-size: 11px;
+            color: #94A3B8;
+            margin-top: 3px;
+            letter-spacing: 0.2px;
+        }
+
+        /* ============ TITRE DE SECTION ============ */
+        .menu-section-title {
+            font-size: 10.5px;
+            font-weight: 700;
+            color: #475569;
+            text-transform: uppercase;
+            letter-spacing: 1.8px;
+            margin: 4px 0 10px 6px;
+        }
+
+        /* ============ MENU DE NAVIGATION (radio stylé) ============ */
+        section[data-testid="stSidebar"] div[role="radiogroup"] {
+            gap: 4px !important;
+        }
+
+        section[data-testid="stSidebar"] div[role="radiogroup"] > label {
+            padding: 11px 14px !important;
+            border-radius: 10px !important;
+            background: transparent !important;
+            border: 1px solid transparent !important;
+            transition: all 0.18s ease !important;
+            cursor: pointer !important;
+            margin: 0 !important;
+        }
+
+        section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+            background: rgba(99, 102, 241, 0.10) !important;
+            border-color: rgba(99, 102, 241, 0.25) !important;
+        }
+
+        /* Cacher la puce ronde par défaut */
+        section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {
+            display: none !important;
+        }
+
+        /* Texte du menu */
+        section[data-testid="stSidebar"] div[role="radiogroup"] > label p {
+            font-size: 14px !important;
+            font-weight: 500 !important;
+            color: #CBD5E1 !important;
+            margin: 0 !important;
+        }
+
+        /* Élément sélectionné */
+        section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+            background: linear-gradient(135deg, #4F46E5 0%, #4338CA 100%) !important;
+            border-color: #6366F1 !important;
+            box-shadow: 0 6px 16px rgba(79, 70, 229, 0.4) !important;
+        }
+        section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) p {
+            color: #FFFFFF !important;
+            font-weight: 600 !important;
+        }
+
+        /* ============ BOUTON DÉCONNEXION ============ */
+        section[data-testid="stSidebar"] button[kind="secondary"] {
+            background: rgba(239, 68, 68, 0.08) !important;
+            color: #FCA5A5 !important;
+            border: 1px solid rgba(239, 68, 68, 0.25) !important;
+            border-radius: 10px !important;
+            font-weight: 600 !important;
+            transition: all 0.18s ease !important;
+        }
+        section[data-testid="stSidebar"] button[kind="secondary"]:hover {
+            background: rgba(239, 68, 68, 0.15) !important;
+            border-color: rgba(239, 68, 68, 0.4) !important;
+        }
+
+        /* ============ PIED DE SIDEBAR ============ */
+        .sidebar-footer {
+            margin-top: 20px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(148, 163, 184, 0.10);
+            font-size: 10.5px;
+            color: #475569;
+            text-align: center;
+            letter-spacing: 0.5px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ==============================================================
+    # BLOC MARQUE / LOGO
+    # ==============================================================
+    if os.path.exists("Logo-FCC.png"):
+        col_logo_sb = st.columns([1, 2, 1])[1]
+        with col_logo_sb:
+            st.image("Logo-FCC.png", use_container_width=True)
+    st.markdown("""
+        <div class="brand-block">
+            <div class="brand-title">FRIENDS TRADING</div>
+            <div class="brand-sub">ERP · Gestion Cacao</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # ==============================================================
+    # CARTE UTILISATEUR (avec avatar à initiales)
+    # ==============================================================
     role_badges = {
         "Admin": "🔴 Administrateur",
         "Direction": "🟣 Direction",
-        "Employé": "🟢 Employé"
+        "Employé": "🟢 Employé",
+        "Employe": "🟢 Employé",
     }
     badge = role_badges.get(st.session_state.role, f"⚪ {st.session_state.role}")
 
-    st.markdown(
-        f"""
-        <div style="
-            background: linear-gradient(135deg, #1f2937, #111827);
-            border-radius: 12px;
-            padding: 14px 16px;
-            margin-bottom: 10px;
-            border: 1px solid #2d3748;
-        ">
-            <div style="font-size: 13px; color: #9ca3af; margin-bottom: 4px;">
-                Connecté en tant que
-            </div>
-            <div style="font-size: 16px; font-weight: 700; color: #f9fafb;">
-                👤 {st.session_state.username}
-            </div>
-            <div style="font-size: 12px; color: #d1d5db; margin-top: 6px;">
-                {badge}
+    # Calcul des initiales
+    nom_complet = st.session_state.username or "Utilisateur"
+    mots = [m for m in nom_complet.split() if m]
+    if len(mots) >= 2:
+        initiales = (mots[0][0] + mots[1][0]).upper()
+    elif len(mots) == 1:
+        initiales = mots[0][:2].upper()
+    else:
+        initiales = "U"
+
+    st.markdown(f"""
+        <div class="user-card">
+            <div class="user-avatar">{initiales}</div>
+            <div class="user-info">
+                <div class="user-name">👤 {nom_complet}</div>
+                <div class="user-role">{badge}</div>
             </div>
         </div>
-        """,
-        unsafe_allow_html=True
-    )
+    """, unsafe_allow_html=True)
 
+    # ==============================================================
+    # BOUTON DÉCONNEXION
+    # ==============================================================
     if st.button("🚪 Déconnexion", use_container_width=True):
         log_action("Déconnexion")
         st.session_state.logged_in = False
         st.rerun()
 
-    st.divider()
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # --- Liste de référence absolue de TOUS les onglets possibles ---
+    # ==============================================================
+    # LISTE DE RÉFÉRENCE DES ONGLETS
+    # ==============================================================
     ONGLETS_DISPONIBLES = [
         "🏠 Tableau de Bord",
         "📦 Mouvements de Stock",
-        "🎒 Mouvements de Sacs", 
+        "🎒 Mouvements de Sacs",
         "🧾 Achats (Entrees)",
         "🛍️ Ventes (Sorties)",
         "👥 Clients",
@@ -2705,7 +2882,9 @@ with st.sidebar:
         "⚙️ Administration & Backup"
     ]
 
-    # --- Récupération des permissions de l'utilisateur connecté ---
+    # ==============================================================
+    # RÉCUPÉRATION DES PERMISSIONS
+    # ==============================================================
     permissions_raw = st.session_state.get("permissions_raw", None)
 
     if permissions_raw is not None and permissions_raw != "":
@@ -2717,46 +2896,36 @@ with st.sidebar:
         else:
             menus = [m for m in ONGLETS_DISPONIBLES if m != "⚙️ Administration & Backup"]
 
-    # --- Sécurité ultime : accès minimal garanti ---
     if not menus:
         menus = ["🏠 Tableau de Bord"]
 
-    # --- Titre du menu ---
+    # ==============================================================
+    # TITRE DU MENU + RADIO STYLÉ
+    # ==============================================================
     st.markdown(
-        """
-        <div style="
-            font-size: 12px;
-            font-weight: 700;
-            color: #6b7280;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 8px;
-        ">
-            📋 Menu Principal
-        </div>
-        """,
+        '<div class="menu-section-title">📋 Menu Principal</div>',
         unsafe_allow_html=True
     )
 
-    choix = st.radio("Menu Principal", menus, label_visibility="collapsed")
+    choix = st.radio(
+        "Menu Principal",
+        menus,
+        label_visibility="collapsed",
+        key="sidebar_nav_radio"
+    )
 
-    # --- Pied de sidebar ---
+    # ==============================================================
+    # PIED DE SIDEBAR
+    # ==============================================================
     st.markdown(
         f"""
-        <div style="
-            margin-top: 24px;
-            padding-top: 12px;
-            border-top: 1px solid #2d3748;
-            font-size: 11px;
-            color: #6b7280;
-            text-align: center;
-        ">
+        <div class="sidebar-footer">
             {len(menus)} module{'s' if len(menus) > 1 else ''} accessible{'s' if len(menus) > 1 else ''}
+            <br>ERP FCC · v2.0
         </div>
         """,
         unsafe_allow_html=True
     )
-
 # ==========================================
 # 7. PAGES DE L'APPLICATION
 # ==========================================
