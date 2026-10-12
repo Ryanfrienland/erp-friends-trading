@@ -6095,22 +6095,301 @@ elif choix == "📦 Mouvements de Stock":
             use_container_width=True
         )
 
-        # Section de suppression/modification (uniquement pour l'admin)
-        if st.session_state.role == "Admin":
-            st.divider()
-            with st.expander("🛠️ Administration des mouvements (Admin)", expanded=False):
-                st.warning("⚠️ Supprimer un mouvement peut déséquilibrer les stocks. Utilisez avec précaution.")
-                selected_id = st.selectbox("Sélectionner un mouvement par ID", df_journal['id'].tolist(), key="select_mvt_id")
-                if st.button("🗑️ Supprimer ce mouvement", type="primary"):
-                    try:
-                        with conn.cursor() as cur:
-                            cur.execute("DELETE FROM stock WHERE id = %s", (selected_id,))
-                            conn.commit()
-                            log_action(f"Suppression du mouvement stock ID {selected_id}")
-                            st.success(f"✅ Mouvement ID {selected_id} supprimé.")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Erreur : {e}")
+                # =====================================================================
+                # SECTION ADMIN : MODIFICATION + SUPPRESSION DES MOUVEMENTS
+                # =====================================================================
+                if st.session_state.role == "Admin":
+                    st.divider()
+                    with st.expander("🛠️ Administration des mouvements (Admin)", expanded=False):
+                        st.warning(
+                            "⚠️ **Zone sensible** — Modifier ou supprimer un mouvement impacte directement "
+                            "le stock physique. Chaque action est journalisée."
+                        )
+        
+                        # ----- Sélection du mouvement à éditer -----
+                        col_sel1, col_sel2 = st.columns([3, 1])
+                        with col_sel1:
+                            selected_id = st.selectbox(
+                                "🔍 Sélectionner un mouvement par ID",
+                                df_journal['id'].tolist(),
+                                key="select_mvt_id"
+                            )
+                        with col_sel2:
+                            st.write("")
+                            st.write("")
+                            st.caption(f"ID : **{selected_id}**")
+        
+                        # ----- Récupération du mouvement en base -----
+                        mvt_row = fetch_one("""
+                            SELECT id, date, type, quantite_kg, origine,
+                                   magasin_destination, fournisseur, id_contrat, commentaire
+                            FROM stock
+                            WHERE id = %s
+                        """, (selected_id,))
+        
+                        if not mvt_row:
+                            st.error("❌ Mouvement introuvable. Il a peut-être été supprimé.")
+                        else:
+                            # Décodage du tuple
+                            (
+                                mvt_id, mvt_date, mvt_type, mvt_qte,
+                                mvt_origine, mvt_magasin, mvt_fournisseur,
+                                mvt_id_contrat, mvt_commentaire
+                            ) = mvt_row
+        
+                            # Conversion de la date pour l'affichage
+                            try:
+                                if isinstance(mvt_date, str):
+                                    date_valeur = datetime.strptime(mvt_date[:19], "%Y-%m-%d %H:%M:%S")
+                                else:
+                                    date_valeur = mvt_date
+                            except Exception:
+                                date_valeur = datetime.now()
+        
+                            # Liste des magasins pour le selectbox
+                            magasins_noms = [r[0] for r in fetch_all("SELECT nom FROM magasins ORDER BY nom")]
+        
+                            # =============================================================
+                            # ONGLETS INTERNES : Modifier | Supprimer
+                            # =============================================================
+                            tab_edit, tab_del = st.tabs(["✏️ Modifier ce mouvement", "🗑️ Supprimer ce mouvement"])
+        
+                            # -------------------------------------------------------------
+                            # ONGLET MODIFIER
+                            # -------------------------------------------------------------
+                            with tab_edit:
+                                st.markdown(f"**Édition du mouvement ID `{mvt_id}`**")
+                                st.caption(
+                                    f"📅 Enregistré le **{date_valeur.strftime('%d/%m/%Y à %H:%M')}** "
+                                    f"par un utilisateur."
+                                )
+        
+                                with st.form("form_edit_mouvement_stock"):
+                                    e1, e2, e3 = st.columns(3)
+        
+                                    with e1:
+                                        new_date = st.date_input(
+                                            "📅 Date",
+                                            value=date_valeur.date(),
+                                            key="edit_mvt_date"
+                                        )
+                                        new_heure = st.time_input(
+                                            "🕐 Heure",
+                                            value=date_valeur.time().replace(microsecond=0),
+                                            key="edit_mvt_heure"
+                                        )
+        
+                                    with e2:
+                                        new_type = st.selectbox(
+                                            "🔄 Type de mouvement *",
+                                            ["Entrée", "Sortie"],
+                                            index=0 if mvt_type == "Entrée" else 1,
+                                            key="edit_mvt_type"
+                                        )
+                                        new_qte = st.number_input(
+                                            "⚖️ Quantité (kg) *",
+                                            min_value=0.01,
+                                            value=float(mvt_qte or 0),
+                                            step=10.0,
+                                            key="edit_mvt_qte"
+                                        )
+        
+                                    with e3:
+                                        magasin_index = 0
+                                        if mvt_magasin and mvt_magasin in magasins_noms:
+                                            magasin_index = magasins_noms.index(mvt_magasin)
+                                        new_magasin = st.selectbox(
+                                            "🏢 Magasin destination *",
+                                            magasins_noms,
+                                            index=magasin_index,
+                                            key="edit_mvt_magasin"
+                                        )
+        
+                                    e4, e5 = st.columns(2)
+                                    with e4:
+                                        new_origine = st.text_input(
+                                            "📍 Origine / Provenance",
+                                            value=mvt_origine or "",
+                                            key="edit_mvt_origine"
+                                        )
+                                        new_fournisseur = st.text_input(
+                                            "🤝 Fournisseur",
+                                            value=mvt_fournisseur or "",
+                                            key="edit_mvt_fournisseur"
+                                        )
+                                    with e5:
+                                        new_id_contrat = st.text_input(
+                                            "📝 ID Contrat (optionnel)",
+                                            value=str(mvt_id_contrat) if mvt_id_contrat else "",
+                                            key="edit_mvt_id_contrat"
+                                        )
+                                        new_commentaire = st.text_area(
+                                            "💬 Commentaire",
+                                            value=mvt_commentaire or "",
+                                            height=100,
+                                            key="edit_mvt_commentaire"
+                                        )
+        
+                                    st.markdown("---")
+                                    st.info(
+                                        "💡 **Rappel métier** : modifier le type ou la quantité d'un mouvement "
+                                        "affecte l'historique du stock. Vérifiez bien avant de valider."
+                                    )
+        
+                                    submit_edit = st.form_submit_button(
+                                        "💾 Enregistrer les modifications",
+                                        type="primary",
+                                        use_container_width=True
+                                    )
+        
+                                    if submit_edit:
+                                        try:
+                                            # Recomposer le timestamp
+                                            new_datetime = datetime.combine(new_date, new_heure)
+                                            new_datetime_str = new_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        
+                                            # Vérification : si c'est une sortie, vérifier que
+                                            # le stock (hors ce mouvement) reste positif
+                                            if new_type == "Sortie":
+                                                row_check = fetch_one("""
+                                                    SELECT COALESCE(SUM(
+                                                        CASE WHEN type='Entrée' THEN quantite_kg
+                                                             WHEN type='Sortie' THEN -quantite_kg
+                                                             ELSE 0 END
+                                                    ), 0)
+                                                    FROM stock
+                                                    WHERE magasin_destination = %s
+                                                      AND id != %s
+                                                """, (new_magasin, mvt_id))
+                                                stock_hors_mvt = float(row_check[0]) if row_check else 0.0
+        
+                                                if stock_hors_mvt - new_qte < 0:
+                                                    st.error(
+                                                        f"❌ Impossible : cette modification ferait passer le stock de "
+                                                        f"**{new_magasin}** en négatif.\n\n"
+                                                        f"Stock hors ce mouvement : **{stock_hors_mvt:,.2f} kg** — "
+                                                        f"Quantité demandée : **{new_qte:,.2f} kg**."
+                                                    )
+                                                    st.stop()
+        
+                                            # Mise à jour
+                                            with conn.cursor() as cur:
+                                                cur.execute("""
+                                                    UPDATE stock
+                                                    SET date = %s,
+                                                        type = %s,
+                                                        quantite_kg = %s,
+                                                        origine = %s,
+                                                        magasin_destination = %s,
+                                                        fournisseur = %s,
+                                                        id_contrat = %s,
+                                                        commentaire = %s
+                                                    WHERE id = %s
+                                                """, (
+                                                    new_datetime_str,
+                                                    new_type,
+                                                    new_qte,
+                                                    new_origine or None,
+                                                    new_magasin,
+                                                    new_fournisseur or None,
+                                                    new_id_contrat or None,
+                                                    new_commentaire or None,
+                                                    mvt_id
+                                                ))
+                                                conn.commit()
+        
+                                            # Invalidation du cache + log
+                                            if 'get_stock_actuel' in globals():
+                                                get_stock_actuel.clear()
+        
+                                            log_action(
+                                                f"✏️ MODIFICATION mouvement stock ID {mvt_id} : "
+                                                f"{mvt_type} {mvt_qte} kg → {new_type} {new_qte} kg "
+                                                f"({mvt_magasin} → {new_magasin})"
+                                            )
+                                            st.success(f"✅ Mouvement ID `{mvt_id}` modifié avec succès !")
+                                            st.rerun()
+        
+                                        except Exception as e:
+                                            conn.rollback()
+                                            st.error(f"❌ Erreur lors de la modification : {e}")
+        
+                            # -------------------------------------------------------------
+                            # ONGLET SUPPRIMER
+                            # -------------------------------------------------------------
+                            with tab_del:
+                                st.markdown(f"**Suppression du mouvement ID `{mvt_id}`**")
+                                st.error(
+                                    "⚠️ La suppression est **définitive** et ne peut pas être annulée.\n\n"
+                                    "Utilisez la suppression uniquement pour corriger une **erreur de saisie** "
+                                    "(doublon, mauvais magasin, mauvaise quantité)."
+                                )
+        
+                                # Récap visuel avant suppression
+                                st.markdown(f"""
+                                <div style="
+                                    background: #FEF2F2;
+                                    border: 1px solid #FECACA;
+                                    border-radius: 10px;
+                                    padding: 14px 18px;
+                                    margin: 10px 0;
+                                ">
+                                    <div style="font-size:12px; color:#991B1B; font-weight:700;
+                                                letter-spacing:1px; margin-bottom:8px;">
+                                        MOUVEMENT À SUPPRIMER
+                                    </div>
+                                    <div style="font-size:13px; color:#7F1D1D; line-height:1.7;">
+                                        <b>Type :</b> {mvt_type}<br>
+                                        <b>Date :</b> {date_valeur.strftime('%d/%m/%Y %H:%M')}<br>
+                                        <b>Quantité :</b> {mvt_qte:,.2f} kg<br>
+                                        <b>Magasin :</b> {mvt_magasin}<br>
+                                        <b>Origine :</b> {mvt_origine or '—'}<br>
+                                        <b>Fournisseur :</b> {mvt_fournisseur or '—'}<br>
+                                        <b>Commentaire :</b> {mvt_commentaire or '—'}
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
+        
+                                # Confirmation par saisie
+                                confirmation = st.text_input(
+                                    "🔐 Tapez le mot **SUPPRIMER** pour confirmer",
+                                    placeholder="SUPPRIMER",
+                                    key="confirm_delete_mvt"
+                                )
+        
+                                col_del1, col_del2 = st.columns(2)
+        
+                                with col_del1:
+                                    if st.button(
+                                        "🗑️ Confirmer la suppression",
+                                        type="primary",
+                                        use_container_width=True,
+                                        disabled=(confirmation.strip().upper() != "SUPPRIMER"),
+                                        key="btn_confirm_del_mvt"
+                                    ):
+                                        try:
+                                            with conn.cursor() as cur:
+                                                cur.execute("DELETE FROM stock WHERE id = %s", (mvt_id,))
+                                                conn.commit()
+        
+                                            if 'get_stock_actuel' in globals():
+                                                get_stock_actuel.clear()
+        
+                                            log_action(
+                                                f"🗑️ SUPPRESSION mouvement stock ID {mvt_id} "
+                                                f"({mvt_type} {mvt_qte} kg - {mvt_magasin})"
+                                            )
+                                            st.success(f"✅ Mouvement ID `{mvt_id}` supprimé définitivement.")
+                                            st.rerun()
+                                        except Exception as e:
+                                            conn.rollback()
+                                            st.error(f"❌ Erreur lors de la suppression : {e}")
+        
+                                with col_del2:
+                                    if confirmation.strip().upper() != "SUPPRIMER":
+                                        st.caption("🔒 Saisie incorrecte — le bouton reste désactivé.")
+                                    else:
+                                        st.caption("✅ Confirmation validée. Cliquez pour supprimer.")
 
         # Graphique des flux
     st.divider()
@@ -7313,15 +7592,16 @@ elif choix == "🎒 Mouvements de Sacs":
         
         df_inv = get_dataframe_from_query("""
             SELECT 
-                TO_CHAR(date, 'DD/MM/YYYY HH24:MI') AS "Date",
+                TO_CHAR(ms.date, 'DD/MM/YYYY HH24:MI') AS "Date",
                 m.nom AS "Magasin",
-                code_sac AS "Sac",
-                quantite AS "Ajustement",
-                motif AS "Motif",
-                utilisateur AS "Opérateur"
-            FROM mouvements_sacs
-            WHERE type_mouvement IN ('INVENTAIRE_PLUS', 'INVENTAIRE_MOINS')
-            ORDER BY date DESC LIMIT 20
+                ms.code_sac AS "Sac",
+                ms.quantite AS "Ajustement",
+                ms.motif AS "Motif",
+                ms.utilisateur AS "Opérateur"
+            FROM mouvements_sacs ms
+            JOIN magasins m ON ms.id_magasin = m.id
+            WHERE ms.type_mouvement IN ('INVENTAIRE_PLUS', 'INVENTAIRE_MOINS')
+            ORDER BY ms.date DESC LIMIT 20
         """)
         
         if df_inv.empty:
