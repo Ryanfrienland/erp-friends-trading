@@ -2632,7 +2632,18 @@ def get_stock_actuel():
     entree = get_single_value("SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE type = 'Entrée'")
     sortie = get_single_value("SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE type = 'Sortie'")
     return entree - sortie
-
+    
+def safe_df(query, params=None):
+    """
+    Variante de get_dataframe_from_query qui normalise automatiquement
+    les noms de colonnes en minuscules pour éviter les surprises PostgreSQL.
+    À utiliser quand on veut ensuite accéder aux colonnes avec row['xxx'].
+    """
+    df = get_dataframe_from_query(query, params)
+    if not df.empty:
+        df.columns = [str(c).strip().lower() for c in df.columns]
+    return df
+    
 def insert_dict(cursor, table, data):
     """
     Insère une ligne dans `table` à partir d'un dictionnaire `data` (colonne -> valeur).
@@ -2649,82 +2660,92 @@ def insert_dict(cursor, table, data):
 
 with st.sidebar:
     # ==============================================================
-    # STYLES DU MENU LATÉRAL
+    # STYLES DU MENU LATÉRAL — VERSION CLAIRE & MODERNE
     # ==============================================================
     st.markdown("""
     <style>
-        /* Fond dégradé du sidebar */
+        /* ============ FOND DU SIDEBAR (CLAIR) ============ */
         section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0B1120 0%, #0F172A 55%, #111827 100%);
-            border-right: 1px solid rgba(148, 163, 184, 0.08);
+            background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+            border-right: 1px solid #E2E8F0;
+            box-shadow: 4px 0 24px rgba(15, 23, 42, 0.04);
         }
 
         section[data-testid="stSidebar"] > div:first-child {
             padding-top: 1.2rem;
+            padding-left: 0.9rem;
+            padding-right: 0.9rem;
         }
 
         /* ============ BRAND / LOGO ============ */
         .brand-block {
             text-align: center;
-            padding: 4px 0 14px 0;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.10);
-            margin-bottom: 16px;
+            padding: 6px 0 16px 0;
+            border-bottom: 1px solid #E2E8F0;
+            margin-bottom: 18px;
         }
         .brand-title {
             font-size: 15px;
             font-weight: 800;
-            color: #F8FAFC;
-            letter-spacing: 0.4px;
-            margin-top: 4px;
+            color: #0F172A;
+            letter-spacing: 0.3px;
+            margin-top: 6px;
         }
         .brand-sub {
             font-size: 10px;
-            color: #64748B;
-            letter-spacing: 1.5px;
+            color: #94A3B8;
+            letter-spacing: 1.8px;
             text-transform: uppercase;
-            margin-top: 2px;
+            margin-top: 3px;
+            font-weight: 600;
         }
 
-        /* ============ CARTE UTILISATEUR ============ */
+        /* ============ CARTE UTILISATEUR (CLAIRE) ============ */
         .user-card {
             display: flex;
             align-items: center;
             gap: 12px;
             padding: 14px;
-            background: linear-gradient(135deg, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.95) 100%);
-            border: 1px solid rgba(148, 163, 184, 0.12);
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
             border-radius: 14px;
-            margin-bottom: 14px;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255,255,255,0.03);
+            margin-bottom: 16px;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+            transition: all 0.2s ease;
+        }
+        .user-card:hover {
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.10);
+            border-color: #CBD5E1;
         }
         .user-avatar {
             width: 44px;
             height: 44px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #6366F1, #8B5CF6);
+            border-radius: 12px;
+            background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%);
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 800;
-            font-size: 16px;
+            font-size: 15px;
             color: #FFFFFF;
             letter-spacing: 0.5px;
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
             flex-shrink: 0;
         }
         .user-info { min-width: 0; flex: 1; }
         .user-name {
             font-size: 14px;
             font-weight: 700;
-            color: #F8FAFC;
+            color: #0F172A;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
         .user-role {
             font-size: 11px;
-            color: #94A3B8;
+            color: #64748B;
             margin-top: 3px;
+            font-weight: 500;
             letter-spacing: 0.2px;
         }
 
@@ -2732,30 +2753,32 @@ with st.sidebar:
         .menu-section-title {
             font-size: 10.5px;
             font-weight: 700;
-            color: #475569;
+            color: #94A3B8;
             text-transform: uppercase;
-            letter-spacing: 1.8px;
-            margin: 4px 0 10px 6px;
+            letter-spacing: 2px;
+            margin: 8px 0 10px 8px;
         }
 
-        /* ============ MENU DE NAVIGATION (radio stylé) ============ */
+        /* ============ MENU DE NAVIGATION (CLAIR + FORT CONTRASTE) ============ */
         section[data-testid="stSidebar"] div[role="radiogroup"] {
             gap: 4px !important;
         }
 
         section[data-testid="stSidebar"] div[role="radiogroup"] > label {
-            padding: 11px 14px !important;
+            padding: 12px 14px !important;
             border-radius: 10px !important;
             background: transparent !important;
             border: 1px solid transparent !important;
-            transition: all 0.18s ease !important;
+            transition: all 0.15s ease !important;
             cursor: pointer !important;
             margin: 0 !important;
+            position: relative;
         }
 
         section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-            background: rgba(99, 102, 241, 0.10) !important;
-            border-color: rgba(99, 102, 241, 0.25) !important;
+            background: #F1F5F9 !important;
+            border-color: #E2E8F0 !important;
+            transform: translateX(2px);
         }
 
         /* Cacher la puce ronde par défaut */
@@ -2763,48 +2786,82 @@ with st.sidebar:
             display: none !important;
         }
 
-        /* Texte du menu */
+        /* Texte du menu — BIEN LISIBLE */
         section[data-testid="stSidebar"] div[role="radiogroup"] > label p {
             font-size: 14px !important;
-            font-weight: 500 !important;
-            color: #CBD5E1 !important;
+            font-weight: 600 !important;
+            color: #1E293B !important;
             margin: 0 !important;
+            letter-spacing: 0.1px;
         }
 
-        /* Élément sélectionné */
+        /* ============ ÉLÉMENT SÉLECTIONNÉ ============ */
         section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
-            background: linear-gradient(135deg, #4F46E5 0%, #4338CA 100%) !important;
+            background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%) !important;
             border-color: #6366F1 !important;
-            box-shadow: 0 6px 16px rgba(79, 70, 229, 0.4) !important;
+            box-shadow: 0 8px 20px rgba(79, 70, 229, 0.35) !important;
+            transform: translateX(0);
         }
         section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) p {
             color: #FFFFFF !important;
-            font-weight: 600 !important;
+            font-weight: 700 !important;
+        }
+
+        /* Petite barre décorative à gauche de l'item actif */
+        section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked)::before {
+            content: "";
+            position: absolute;
+            left: -0.9rem;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 3px;
+            height: 60%;
+            background: linear-gradient(180deg, #6366F1, #8B5CF6);
+            border-radius: 0 4px 4px 0;
         }
 
         /* ============ BOUTON DÉCONNEXION ============ */
         section[data-testid="stSidebar"] button[kind="secondary"] {
-            background: rgba(239, 68, 68, 0.08) !important;
-            color: #FCA5A5 !important;
-            border: 1px solid rgba(239, 68, 68, 0.25) !important;
+            background: #FFFFFF !important;
+            color: #DC2626 !important;
+            border: 1px solid #FECACA !important;
             border-radius: 10px !important;
             font-weight: 600 !important;
-            transition: all 0.18s ease !important;
+            transition: all 0.15s ease !important;
+            box-shadow: 0 2px 6px rgba(220, 38, 38, 0.06);
         }
         section[data-testid="stSidebar"] button[kind="secondary"]:hover {
-            background: rgba(239, 68, 68, 0.15) !important;
-            border-color: rgba(239, 68, 68, 0.4) !important;
+            background: #FEF2F2 !important;
+            border-color: #FCA5A5 !important;
+            color: #B91C1C !important;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.15);
         }
 
         /* ============ PIED DE SIDEBAR ============ */
         .sidebar-footer {
             margin-top: 20px;
-            padding-top: 12px;
-            border-top: 1px solid rgba(148, 163, 184, 0.10);
+            padding-top: 14px;
+            border-top: 1px solid #E2E8F0;
             font-size: 10.5px;
-            color: #475569;
+            color: #94A3B8;
             text-align: center;
             letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+
+        /* ============ SCROLLBAR STYLÉE ============ */
+        section[data-testid="stSidebar"] ::-webkit-scrollbar {
+            width: 6px;
+        }
+        section[data-testid="stSidebar"] ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb {
+            background: #CBD5E1;
+            border-radius: 3px;
+        }
+        section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover {
+            background: #94A3B8;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -2903,7 +2960,7 @@ with st.sidebar:
     # TITRE DU MENU + RADIO STYLÉ
     # ==============================================================
     st.markdown(
-        '<div class="menu-section-title">📋 Menu Principal</div>',
+        '<div class="menu-section-title">📋 Navigation</div>',
         unsafe_allow_html=True
     )
 
@@ -6900,7 +6957,7 @@ elif choix == "🎒 Mouvements de Sacs":
         df_stock_magasin = get_dataframe_from_query("""
             SELECT 
                 m.id AS id_magasin,
-                m.nom AS Magasin,
+                m.nom AS "Magasin",
                 COALESCE(SUM(CASE WHEN ms.code_sac = 'SAC_NEUF_60' THEN ms.quantite ELSE 0 END), 0) AS "Sacs Neuf",
                 COALESCE(SUM(CASE WHEN ms.code_sac = 'SAC_BROUSSIN_60' THEN ms.quantite ELSE 0 END), 0) AS "Sacs Broussin",
                 COALESCE(SUM(ms.quantite), 0) AS "Total"
@@ -6909,6 +6966,17 @@ elif choix == "🎒 Mouvements de Sacs":
             GROUP BY m.id, m.nom
             ORDER BY m.nom
         """)
+        
+        # 🔧 SÉCURITÉ DÉFENSIVE : normalise les noms de colonnes au cas où
+        # PostgreSQL aurait baissé la casse sur certains alias mal quotés
+        df_stock_magasin.columns = [str(c).strip() for c in df_stock_magasin.columns]
+        renommage_secours = {
+            "magasin": "Magasin",
+            "sacs neuf": "Sacs Neuf",
+            "sacs broussin": "Sacs Broussin",
+            "total": "Total",
+        }
+        df_stock_magasin = df_stock_magasin.rename(columns=renommage_secours)
         
         if df_stock_magasin.empty:
             st.info("Aucun magasin enregistré.")
