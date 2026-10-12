@@ -6085,16 +6085,16 @@ elif choix == "📦 Mouvements de Stock":
             }
         )
 
-        # Bouton d'export
-        col_exp, _ = st.columns([1, 3])
-        col_exp.download_button(
-            label="📥 Exporter le journal (CSV)",
-            data=df_journal.to_csv(index=False).encode('utf-8'),
-            file_name="journal_stock.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
+                # Bouton d'export
+                col_exp, _ = st.columns([1, 3])
+                col_exp.download_button(
+                    label="📥 Exporter le journal (CSV)",
+                    data=df_journal.to_csv(index=False).encode('utf-8'),
+                    file_name="journal_stock.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+        
                 # =====================================================================
                 # SECTION ADMIN : MODIFICATION + SUPPRESSION DES MOUVEMENTS
                 # =====================================================================
@@ -6244,12 +6244,9 @@ elif choix == "📦 Mouvements de Stock":
         
                                     if submit_edit:
                                         try:
-                                            # Recomposer le timestamp
                                             new_datetime = datetime.combine(new_date, new_heure)
                                             new_datetime_str = new_datetime.strftime("%Y-%m-%d %H:%M:%S")
         
-                                            # Vérification : si c'est une sortie, vérifier que
-                                            # le stock (hors ce mouvement) reste positif
                                             if new_type == "Sortie":
                                                 row_check = fetch_one("""
                                                     SELECT COALESCE(SUM(
@@ -6272,7 +6269,6 @@ elif choix == "📦 Mouvements de Stock":
                                                     )
                                                     st.stop()
         
-                                            # Mise à jour
                                             with conn.cursor() as cur:
                                                 cur.execute("""
                                                     UPDATE stock
@@ -6298,7 +6294,6 @@ elif choix == "📦 Mouvements de Stock":
                                                 ))
                                                 conn.commit()
         
-                                            # Invalidation du cache + log
                                             if 'get_stock_actuel' in globals():
                                                 get_stock_actuel.clear()
         
@@ -6325,7 +6320,6 @@ elif choix == "📦 Mouvements de Stock":
                                     "(doublon, mauvais magasin, mauvaise quantité)."
                                 )
         
-                                # Récap visuel avant suppression
                                 st.markdown(f"""
                                 <div style="
                                     background: #FEF2F2;
@@ -6350,7 +6344,6 @@ elif choix == "📦 Mouvements de Stock":
                                 </div>
                                 """, unsafe_allow_html=True)
         
-                                # Confirmation par saisie
                                 confirmation = st.text_input(
                                     "🔐 Tapez le mot **SUPPRIMER** pour confirmer",
                                     placeholder="SUPPRIMER",
