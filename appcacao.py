@@ -11,6 +11,7 @@ import re
 import base64
 import tempfile
 import logging
+import requests
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -1962,11 +1963,10 @@ def _email_config():
     try:
         cfg = st.secrets.get("email", {})
         return {
-            "server":   cfg.get("smtp_server", "smtp.gmail.com"),
-            "port":     int(cfg.get("smtp_port", 587)),
-            "sender":   cfg.get("sender_email", ""),
-            "password": cfg.get("sender_password", ""),
-            "name":     cfg.get("sender_name", "ERP Friends Cameroon Commodities"),
+            "provider":      cfg.get("provider", "brevo"),
+            "brevo_api_key": cfg.get("brevo_api_key", ""),
+            "sender":        cfg.get("sender_email", ""),
+            "name":          cfg.get("sender_name", "ERP Friends Cameroon Commodities"),
             "recipients": [
                 e.strip()
                 for e in cfg.get("alert_recipients", "").split(",")
@@ -1981,35 +1981,49 @@ def _email_config():
 
 def envoyer_email_html(sujet: str, html_body: str, destinataires: list) -> tuple:
     """
-    Envoie un email HTML via SMTP.
+    Envoie un email HTML via l'API Brevo (HTTPS, jamais bloqué par Streamlit Cloud).
     Retourne (succès: bool, message_erreur: str|None).
     """
     cfg = _email_config()
     if not cfg.get("enabled"):
         return False, "L'envoi d'emails est désactivé dans les secrets."
-    if not cfg["sender"] or not cfg["password"]:
-        return False, "Identifiants SMTP manquants dans les secrets."
+
+    api_key = cfg.get("brevo_api_key")
+    if not api_key or not api_key.startswith("xkeysib-"):
+        return False, "Clé API Brevo manquante ou invalide."
+
     if not destinataires:
         return False, "Aucun destinataire configuré."
 
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {
+        "accept": "application/json",
+        "api-key": api_key,
+        "content-type": "application/json",
+    }
+
+    payload = {
+        "sender": {
+            "name": cfg.get("name", "ERP FCC"),
+            "email": cfg.get("sender", ""),
+        },
+        "to": [{"email": email} for email in destinataires],
+        "subject": sujet,
+        "htmlContent": html_body,
+    }
+
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = sujet
-        msg["From"] = f"{cfg['name']} <{cfg['sender']}>"
-        msg["To"] = ", ".join(destinataires)
-
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-        with smtplib.SMTP(cfg["server"], cfg["port"], timeout=20) as server:
-            server.starttls()
-            server.login(cfg["sender"], cfg["password"])
-            server.sendmail(cfg["sender"], destinataires, msg.as_string())
-
-        return True, None
+        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        if response.status_code in (200, 201, 202):
+            logging.info(f"✅ Email Brevo envoyé → {', '.join(destinataires)}")
+            return True, None
+        else:
+            error_message = f"HTTP {response.status_code} - {response.text[:300]}"
+            logging.error(f"❌ Erreur Brevo : {error_message}")
+            return False, error_message
     except Exception as e:
-        logging.error(f"Erreur envoi email : {e}")
+        logging.error(f"❌ Erreur envoi email Brevo : {e}")
         return False, str(e)
-
 
 def collecter_alertes_contrats() -> list:
     """
