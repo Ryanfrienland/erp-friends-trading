@@ -11,6 +11,9 @@ import re
 import base64
 import tempfile
 import logging
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from reportlab.lib.utils import ImageReader
 from num2words import num2words
 from datetime import datetime, date, timedelta  # 👈 Très important pour la gestion des dates et délais !
@@ -266,6 +269,23 @@ def authentifier():
         st.stop()
 
 authentifier()
+
+# --- Auto-alerte contrats : 1 seule fois par jour ---
+if st.session_state.logged_in:
+    try:
+        if not st.session_state.get("_email_checked_today"):
+            st.session_state._email_checked_today = True
+            if not email_deja_envoye_aujourdhui():
+                cfg_email = _email_config()
+                if cfg_email.get("enabled"):
+                    res_email = envoyer_alertes_contrats("contrats_quotidien")
+                    if res_email["success"] and res_email["nb_alertes"] > 0:
+                        st.toast(
+                            f"🔔 {res_email['nb_alertes']} alerte(s) contrat(s) envoyée(s) par email",
+                            icon="📧"
+                        )
+    except Exception as _e:
+        logging.error(f"Erreur auto-alerte email : {_e}")
 # ==========================================
 # 4. FONCTIONS UTILITAIRES ET PDF
 # ==========================================
@@ -1933,7 +1953,342 @@ class BonReceptionPDF(FPDF):
         self.set_text_color(148, 163, 184)
         self.cell(0, 10, _clean_text("Document généré automatiquement — Friends Cameroon Commodities"), align="C")
 
+# ==========================================
+# MODULE EMAIL — ALERTES CONTRATS
+# ==========================================
 
+def _email_config():
+    """Lit la configuration email depuis les secrets Streamlit."""
+    try:
+        cfg = st.secrets.get("email", {})
+        return {
+            "server":   cfg.get("smtp_server", "smtp.gmail.com"),
+            "port":     int(cfg.get("smtp_port", 587)),
+            "sender":   cfg.get("sender_email", ""),
+            "password": cfg.get("sender_password", ""),
+            "name":     cfg.get("sender_name", "ERP Friends Cameroon Commodities"),
+            "recipients": [
+                e.strip()
+                for e in cfg.get("alert_recipients", "").split(",")
+                if e.strip()
+            ],
+            "enabled": bool(cfg.get("alerts_enabled", False)),
+        }
+    except Exception as e:
+        logging.error(f"Erreur config email : {e}")
+        return {"enabled": False}
+
+
+def envoyer_email_html(sujet: str, html_body: str, destinataires: list) -> tuple:
+    """
+    Envoie un email HTML via SMTP.
+    Retourne (succès: bool, message_erreur: str|None).
+    """
+    cfg = _email_config()
+    if not cfg.get("enabled"):
+        return False, "L'envoi d'emails est désactivé dans les secrets."
+    if not cfg["sender"] or not cfg["password"]:
+        return False, "Identifiants SMTP manquants dans les secrets."
+    if not destinataires:
+        return False, "Aucun destinataire configuré."
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = sujet
+        msg["From"] = f"{cfg['name']} <{cfg['sender']}>"
+        msg["To"] = ", ".join(destinataires)
+
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+        with smtplib.SMTP(cfg["server"], cfg["port"], timeout=20) as server:
+            server.starttls()
+            server.login(cfg["sender"], cfg["password"])
+            server.sendmail(cfg["sender"], destinataires, msg.as_string())
+
+        return True, None
+    except Exception as e:
+        logging.error(f"Erreur envoi email : {e}")
+        return False, str(e)
+
+
+def collecter_alertes_contrats() -> list:
+    """
+    Analyse les contrats actifs et retourne la liste des contrats
+    nécessitant une alerte, avec le motif et le niveau d'urgence.
+    """
+    from datetime import datetime as _dt, date as _date
+
+    contrats = fetch_all("""
+        SELECT
+            c.id, c.numero_contrat, f.nom AS fournisseur,
+            c.date_signature, c.delai_livraison,
+            c.quantite_prevue, c.prix_unitaire,
+            c.statut, c.provenance,
+            COALESCE((
+                SELECT SUM(quantite_kg) FROM achats
+                WHERE numero_contrat = c.numero_contrat
+            ), 0) AS qte_livree
+        FROM contrats c
+        JOIN fournisseurs f ON c.id_fournisseur = f.id
+        WHERE c.statut IN ('Actif', 'VALIDE')
+        ORDER BY c.delai_livraison ASC
+    """)
+
+    aujourd_hui = _date.today()
+    alertes = []
+
+    for c in contrats:
+        (
+            c_id, num, fourn, date_sig, delai,
+            qte_prevue, pu, statut, prov, qte_livree
+        ) = c
+
+        qte_prevue = float(qte_prevue or 0)
+        qte_livree = float(qte_livree or 0)
+        progression = (qte_livree / qte_prevue) if qte_prevue > 0 else 1.0
+
+        # Convertir délai
+        delai_date = None
+        if delai:
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+                try:
+                    delai_date = _dt.strptime(str(delai)[:10], fmt).date()
+                    break
+                except (ValueError, TypeError):
+                    pass
+
+        jours_restants = (delai_date - aujourd_hui).days if delai_date else None
+
+        # --- Règles d'alerte ---
+        motif = None
+        urgence = "info"   # 'critical', 'warning', 'info'
+
+        if jours_restants is not None:
+            # 1. En retard
+            if jours_restants < 0 and progression < 1.0:
+                motif = f"🔴 EN RETARD de {abs(jours_restants)} jours"
+                urgence = "critical"
+            # 2. Échéance dans 3 jours et < 80% livré
+            elif 0 <= jours_restants <= 3 and progression < 0.8:
+                motif = f"🟠 Échéance dans {jours_restants}j — seulement {progression*100:.0f}% livré"
+                urgence = "warning"
+            # 3. Échéance dans 7 jours et < 50% livré
+            elif 4 <= jours_restants <= 7 and progression < 0.5:
+                motif = f"🟡 Échéance dans {jours_restants}j — {progression*100:.0f}% livré"
+                urgence = "warning"
+
+        # 4. Dépassement : livré > 110%
+        if qte_prevue > 0 and qte_livree > qte_prevue * 1.10:
+            motif = f"⚠️ DÉPASSEMENT : {qte_livree:,.0f} kg livrés pour {qte_prevue:,.0f} kg prévus"
+            urgence = "warning"
+
+        # 5. Contrat inactif (>30j sans livraison)
+        if qte_livree == 0 and date_sig:
+            try:
+                ds = _dt.strptime(str(date_sig)[:10], "%Y-%m-%d").date()
+                if (aujourd_hui - ds).days > 30:
+                    motif = f"⏳ Signé depuis {(aujourd_hui - ds).days}j — AUCUNE livraison"
+                    urgence = "warning"
+            except (ValueError, TypeError):
+                pass
+
+        if motif:
+            alertes.append({
+                "id": c_id,
+                "numero": num,
+                "fournisseur": fourn,
+                "provenance": prov or "N/A",
+                "qte_prevue": qte_prevue,
+                "qte_livree": qte_livree,
+                "progression_pct": progression * 100,
+                "delai": delai_date.strftime("%d/%m/%Y") if delai_date else "N/A",
+                "jours_restants": jours_restants,
+                "motif": motif,
+                "urgence": urgence,
+            })
+
+    # Trier par urgence puis par jours_restants
+    alertes.sort(key=lambda x: (
+        {"critical": 0, "warning": 1, "info": 2}.get(x["urgence"], 3),
+        x["jours_restants"] if x["jours_restants"] is not None else 99999,
+    ))
+    return alertes
+
+
+def construire_email_html_alertes(alertes: list) -> str:
+    """Construit le corps HTML de l'email d'alertes."""
+    nb = len(alertes)
+    if nb == 0:
+        return "<p>Aucune alerte à signaler.</p>"
+
+    date_str = datetime.now().strftime("%d/%m/%Y à %H:%M")
+
+    # Compteurs
+    critiques = sum(1 for a in alertes if a["urgence"] == "critical")
+    warnings = sum(1 for a in alertes if a["urgence"] == "warning")
+
+    # Lignes du tableau
+    lignes_html = ""
+    for a in alertes:
+        couleur_bg = "#FEE2E2" if a["urgence"] == "critical" else "#FEF3C7"
+        couleur_txt = "#991B1B" if a["urgence"] == "critical" else "#92400E"
+        lignes_html += f"""
+        <tr style="background-color:{couleur_bg};">
+            <td style="padding:10px; border:1px solid #E2E8F0; font-weight:700;
+                       color:{couleur_txt};">{a['numero']}</td>
+            <td style="padding:10px; border:1px solid #E2E8F0;">{a['fournisseur']}</td>
+            <td style="padding:10px; border:1px solid #E2E8F0; text-align:center;">
+                {a['delai']}
+            </td>
+            <td style="padding:10px; border:1px solid #E2E8F0; text-align:right;">
+                {a['qte_livree']:,.0f} / {a['qte_prevue']:,.0f} kg
+                <br><small style="color:#64748B;">({a['progression_pct']:.0f}%)</small>
+            </td>
+            <td style="padding:10px; border:1px solid #E2E8F0;
+                       color:{couleur_txt}; font-weight:600;">{a['motif']}</td>
+        </tr>
+        """
+
+    html = f"""
+    <html>
+    <body style="font-family: -apple-system, 'Segoe UI', Arial, sans-serif;
+                 background:#F8FAFC; padding:20px; margin:0;">
+      <div style="max-width:900px; margin:auto; background:#FFFFFF;
+                  border-radius:12px; overflow:hidden;
+                  box-shadow:0 4px 16px rgba(0,0,0,0.08);">
+
+        <!-- Bandeau -->
+        <div style="background:linear-gradient(135deg,#4F46E5,#7C3AED);
+                    padding:24px 28px; color:#FFFFFF;">
+            <h1 style="margin:0; font-size:22px;">🔔 Alertes Contrats — ERP Friends Cameroon Commodities</h1>
+            <div style="font-size:13px; opacity:0.9; margin-top:6px;">
+                Généré le {date_str}
+            </div>
+        </div>
+
+        <!-- Compteurs -->
+        <div style="padding:20px 28px; background:#F1F5F9;
+                    display:flex; gap:16px; flex-wrap:wrap;">
+            <div style="background:#FFFFFF; padding:12px 18px; border-radius:8px;
+                        border-left:4px solid #DC2626; min-width:150px;">
+                <div style="font-size:12px; color:#64748B;">🔴 CRITIQUES</div>
+                <div style="font-size:26px; font-weight:800; color:#DC2626;">{critiques}</div>
+            </div>
+            <div style="background:#FFFFFF; padding:12px 18px; border-radius:8px;
+                        border-left:4px solid #F59E0B; min-width:150px;">
+                <div style="font-size:12px; color:#64748B;">🟠 À SURVEILLER</div>
+                <div style="font-size:26px; font-weight:800; color:#F59E0B;">{warnings}</div>
+            </div>
+            <div style="background:#FFFFFF; padding:12px 18px; border-radius:8px;
+                        border-left:4px solid #4F46E5; min-width:150px;">
+                <div style="font-size:12px; color:#64748B;">📋 TOTAL ALERTES</div>
+                <div style="font-size:26px; font-weight:800; color:#4F46E5;">{nb}</div>
+            </div>
+        </div>
+
+        <!-- Tableau -->
+        <div style="padding:20px 28px;">
+            <h2 style="font-size:16px; color:#0F172A; margin-top:0;">
+                Contrats nécessitant votre attention
+            </h2>
+            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                <thead>
+                    <tr style="background:#1E293B; color:#FFFFFF;">
+                        <th style="padding:10px; text-align:left;">N° Contrat</th>
+                        <th style="padding:10px; text-align:left;">Fournisseur</th>
+                        <th style="padding:10px; text-align:center;">Échéance</th>
+                        <th style="padding:10px; text-align:right;">Livré / Prévu</th>
+                        <th style="padding:10px; text-align:left;">Motif</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {lignes_html}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Footer -->
+        <div style="background:#0F172A; color:#94A3B8; padding:16px 28px;
+                    font-size:11px; text-align:center;">
+            🔒 Email automatique — ERP Friends Cameroon Commodities<br>
+            Pour modifier les destinataires, contactez l'administrateur système.
+        </div>
+
+      </div>
+    </body>
+    </html>
+    """
+    return html
+
+
+def envoyer_alertes_contrats(type_alerte: str = "contrats_quotidien") -> dict:
+    """
+    Collecte les alertes, envoie l'email et log l'opération.
+    Retourne un dict avec le statut.
+    """
+    cfg = _email_config()
+    result = {
+        "success": False,
+        "nb_alertes": 0,
+        "message": "",
+        "erreur": None,
+    }
+
+    # Collecte
+    alertes = collecter_alertes_contrats()
+    result["nb_alertes"] = len(alertes)
+
+    # Pas d'alerte = pas d'email
+    if not alertes:
+        result["success"] = True
+        result["message"] = "Aucune alerte — pas d'email envoyé."
+        return result
+
+    # HTML
+    html = construire_email_html_alertes(alertes)
+    sujet = f"🔔 {len(alertes)} contrat(s) à surveiller — ERP FCC"
+
+    # Envoi
+    ok, err = envoyer_email_html(sujet, html, cfg.get("recipients", []))
+    result["success"] = ok
+    result["erreur"] = err
+    result["message"] = "Email envoyé avec succès." if ok else f"Échec : {err}"
+
+    # Log en base
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO email_alerts_log
+                (type_alerte, destinataires, nb_alertes, statut, message_erreur, details)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                type_alerte,
+                ", ".join(cfg.get("recipients", [])),
+                len(alertes),
+                "SUCCESS" if ok else "ERROR",
+                err,
+                f"{len(alertes)} alerte(s) : " + ", ".join(a["numero"] for a in alertes[:5])
+            ))
+            conn.commit()
+    except Exception as log_err:
+        logging.error(f"Erreur log email : {log_err}")
+
+    return result
+
+
+def email_deja_envoye_aujourdhui() -> bool:
+    """Vérifie si un email d'alerte a déjà été envoyé aujourd'hui."""
+    try:
+        row = fetch_one("""
+            SELECT COUNT(*) FROM email_alerts_log
+            WHERE type_alerte = 'contrats_quotidien'
+              AND DATE(date_envoi) = CURRENT_DATE
+              AND statut = 'SUCCESS'
+        """)
+        return (row[0] > 0) if row else False
+    except Exception:
+        return False
+    
 def generer_bon_reception_pdf(data, filename=None):
     num_br = data.get('num_br', 'BR-TEMP')
     if not filename:
@@ -9620,7 +9975,11 @@ elif choix == "⚙️ Administration & Backup":
     st.warning("🔒 Zone réservée aux Administrateurs.")
 
     # --- Onglets principaux : Sauvegarde | Journal | Comptes ---
-    tab_backup, tab_logs = st.tabs(["💾 Sauvegarde", "📋 Journal d'activité"])
+    tab_backup, tab_logs, tab_email = st.tabs([
+        "💾 Sauvegarde",
+        "📋 Journal d'activité",
+        "📧 Alertes Email"
+    ])
 
     # ---- ONGLET 1 : SAUVEGARDE ----
     with tab_backup:
@@ -9885,6 +10244,128 @@ elif choix == "⚙️ Administration & Backup":
                         st.error(f"❌ Erreur lors de la suppression : {e}")
             else:
                 st.info("Aucun compte utilisateur trouvé.")
+    # ---- ONGLET 3 : ALERTES EMAIL ----
+    with tab_email:
+        st.markdown("#### 📧 Gestion des alertes email")
+        st.caption("Envoi automatique d'un récapitulatif quotidien des contrats à surveiller.")
+
+        cfg_email = _email_config()
+
+        # --- Statut de la configuration ---
+        col_status1, col_status2 = st.columns(2)
+        with col_status1:
+            if cfg_email.get("enabled"):
+                st.success("✅ **Module email activé**")
+            else:
+                st.error("❌ **Module email désactivé** — Configurez les secrets")
+        with col_status2:
+            nb_dest = len(cfg_email.get("recipients", []))
+            if nb_dest > 0:
+                st.info(f"📬 **{nb_dest} destinataire(s) configuré(s)**")
+            else:
+                st.warning("⚠️ Aucun destinataire configuré")
+
+        if cfg_email.get("recipients"):
+            with st.expander("👁️ Voir les destinataires"):
+                for r in cfg_email["recipients"]:
+                    st.markdown(f"- `{r}`")
+
+        st.divider()
+
+        # --- Aperçu des alertes actuelles ---
+        st.markdown("##### 🔍 Aperçu des alertes à envoyer")
+        try:
+            alertes_actuelles = collecter_alertes_contrats()
+
+            if not alertes_actuelles:
+                st.success("🎉 Aucune alerte à envoyer — Tous les contrats sont dans les temps.")
+            else:
+                nb_critiques = sum(1 for a in alertes_actuelles if a["urgence"] == "critical")
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("📋 Total alertes", len(alertes_actuelles))
+                m2.metric("🔴 Critiques", nb_critiques)
+                m3.metric("🟠 À surveiller", len(alertes_actuelles) - nb_critiques)
+
+                with st.expander("📄 Voir le détail des alertes", expanded=False):
+                    for a in alertes_actuelles:
+                        icone = "🔴" if a["urgence"] == "critical" else "🟠"
+                        st.markdown(
+                            f"{icone} **{a['numero']}** — {a['fournisseur']} — "
+                            f"{a['qte_livree']:,.0f}/{a['qte_prevue']:,.0f} kg — "
+                            f"*{a['motif']}*"
+                        )
+        except Exception as e:
+            st.error(f"Erreur collecte alertes : {e}")
+            alertes_actuelles = []
+
+        st.divider()
+
+        # --- Bouton d'envoi manuel ---
+        st.markdown("##### 🚀 Envoi manuel")
+        st.caption("Force l'envoi d'un email immédiat, même si un email a déjà été envoyé aujourd'hui.")
+
+        col_btn1, col_btn2 = st.columns(2)
+
+        with col_btn1:
+            if st.button("📧 Envoyer les alertes maintenant", type="primary", use_container_width=True):
+                if not alertes_actuelles:
+                    st.info("ℹ️ Aucune alerte à envoyer.")
+                else:
+                    with st.spinner("Envoi en cours..."):
+                        res = envoyer_alertes_contrats("contrats_manuel")
+                    if res["success"]:
+                        st.success(f"✅ Email envoyé ! {res['nb_alertes']} alerte(s) transmise(s).")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {res['message']}")
+
+        with col_btn2:
+            if st.button("🧪 Envoyer un email de test", use_container_width=True):
+                test_html = f"""
+                <html><body style="font-family:Arial; padding:20px;">
+                    <h2>✅ Test email ERP FCC</h2>
+                    <p>Ceci est un email de test envoyé depuis votre ERP.</p>
+                    <p>Si vous recevez ce message, la configuration email fonctionne ! 🎉</p>
+                    <p style="color:#64748B; font-size:12px;">
+                        Envoyé le {datetime.now().strftime('%d/%m/%Y à %H:%M')}
+                    </p>
+                </body></html>
+                """
+                with st.spinner("Envoi du test..."):
+                    ok, err = envoyer_email_html(
+                        "🧪 Test ERP FCC",
+                        test_html,
+                        cfg_email.get("recipients", [])
+                    )
+                if ok:
+                    st.success("✅ Email de test envoyé ! Vérifiez votre boîte de réception.")
+                else:
+                    st.error(f"❌ Échec : {err}")
+
+        st.divider()
+
+        # --- Historique des envois ---
+        st.markdown("##### 📋 Historique des envois (10 derniers)")
+        try:
+            df_email_log = get_dataframe_from_query("""
+                SELECT
+                    TO_CHAR(date_envoi, 'DD/MM/YYYY HH24:MI') AS "Date",
+                    type_alerte AS "Type",
+                    nb_alertes AS "Alertes",
+                    statut AS "Statut",
+                    destinataires AS "Destinataires",
+                    message_erreur AS "Erreur"
+                FROM email_alerts_log
+                ORDER BY date_envoi DESC
+                LIMIT 10
+            """)
+            if df_email_log.empty:
+                st.info("ℹ️ Aucun email envoyé pour le moment.")
+            else:
+                st.dataframe(df_email_log, use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.warning(f"Impossible de charger l'historique : {e}")
                 
 # FIN DE L'APPLICATION
 # ==========================================
