@@ -1,6 +1,6 @@
 import psycopg2
 from psycopg2.extras import RealDictCursor   # si vous voulez des dictionnaires pour les résultats
-import oshttps://github.com/Ryanfrienland/erp-friends-trading/edit/main/appcacao.py
+import os
 import io
 import hashlib
 import streamlit as st
