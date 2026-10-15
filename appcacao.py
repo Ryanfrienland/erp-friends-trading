@@ -6022,18 +6022,19 @@ elif choix == "💰 Préfinancement Fournisseurs":
             recherche_f = st.text_input("🔎 Rechercher", placeholder="Référence ou fournisseur")
 
         rows = fetch_all("""
-            SELECT pf.id, pf.reference, f.nom, pf.id_fournisseur, pf.date_operation,
-                   pf.montant_accorde, pf.montant_verse, pf.statut,
-                   COALESCE(SUM(ip.montant_impute), 0) AS impute,
-                   pf.observations, pf.valide_par
-            FROM prefinancements_fournisseurs pf
-            JOIN fournisseurs f ON pf.id_fournisseur = f.id
-            LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
-            GROUP BY pf.id, pf.reference, f.nom, pf.id_fournisseur, pf.date_operation,
-                     pf.montant_accorde, pf.montant_verse, pf.statut,
-                     pf.observations, pf.valide_par
-            ORDER BY pf.id DESC
-        """)
+    SELECT pf.id, pf.reference, f.nom, pf.id_fournisseur, pf.date_creation,
+           pf.montant_accorde, pf.montant_verse, pf.statut,
+           COALESCE(imp.total_impute, 0) AS impute,
+           pf.observations, pf.valide_par
+    FROM prefinancements_fournisseurs pf
+    JOIN fournisseurs f ON pf.id_fournisseur = f.id
+    LEFT JOIN (
+        SELECT id_prefinancement, SUM(montant_impute) AS total_impute
+        FROM imputations_prefinancements
+        GROUP BY id_prefinancement
+    ) imp ON imp.id_prefinancement = pf.id
+    ORDER BY pf.id DESC
+""")
 
         if not rows:
             st.info("ℹ️ Aucun préfinancement enregistré.")
