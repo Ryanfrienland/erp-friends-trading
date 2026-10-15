@@ -6022,14 +6022,16 @@ elif choix == "💰 Préfinancement Fournisseurs":
             recherche_f = st.text_input("🔎 Rechercher", placeholder="Référence ou fournisseur")
 
         rows = fetch_all("""
-            SELECT pf.id, pf.reference, f.nom, pf.id_fournisseur, pf.date_creation,
+            SELECT pf.id, pf.reference, f.nom, pf.id_fournisseur, pf.date_operation,
                    pf.montant_accorde, pf.montant_verse, pf.statut,
                    COALESCE(SUM(ip.montant_impute), 0) AS impute,
                    pf.observations, pf.valide_par
             FROM prefinancements_fournisseurs pf
             JOIN fournisseurs f ON pf.id_fournisseur = f.id
             LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
-            GROUP BY pf.id, f.nom
+            GROUP BY pf.id, pf.reference, f.nom, pf.id_fournisseur, pf.date_operation,
+                     pf.montant_accorde, pf.montant_verse, pf.statut,
+                     pf.observations, pf.valide_par
             ORDER BY pf.id DESC
         """)
 
@@ -6234,7 +6236,7 @@ elif choix == "💰 Préfinancement Fournisseurs":
                 WHERE pf.id_fournisseur=%s AND pf.statut IN ('VERSE','PARTIELLEMENT_RECUPERE')
                 GROUP BY pf.id
                 HAVING pf.montant_verse - COALESCE(SUM(ip.montant_impute),0) > 0.01
-                ORDER BY pf.date_creation ASC
+                ORDER BY pf.date_operation ASC
             """, (id_f_imput,))
 
             achats_ouverts = fetch_all("""
