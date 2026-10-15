@@ -4315,7 +4315,15 @@ elif choix == "🧾 Achats (Entrees)":
                                 id_f_temp_row = fetch_one("SELECT id_fournisseur FROM achats WHERE id = %s", (id_achat_temp,))
                                 if id_f_temp_row:
                                     id_f_temp = id_f_temp_row[0]
-                                    comptes_dispo = fetch_all("SELECT numero_de_compte, nom_institution FROM comptes_fournisseurs WHERE id_fournisseur = %s", (id_f_temp,))
+                                    comptes_dispo = fetch_all(
+    """
+    SELECT numero_compte, nom_institution
+    FROM comptes_fournisseurs
+    WHERE id_fournisseur = %s
+    """,
+    (id_f_temp,)
+)
+
                                     if comptes_dispo:
                                         options_comptes = [f"{c[0]} ({c[1]})" for c in comptes_dispo]
                                         compte_a_utiliser = st.selectbox("Sélectionner le compte à afficher sur le PDF :", options_comptes)
