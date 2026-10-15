@@ -3301,6 +3301,7 @@ with st.sidebar:
         "🛍️ Ventes (Sorties)",
         "👥 Clients",
         "🤝 Fournisseurs",
+        "💰 Préfinancement Fournisseurs",
         "🏗️ Prestataires & Transitaires",
         "📝 Contrats",
         "🏪 Magasins",
@@ -3427,7 +3428,13 @@ if choix == "🏠 Tableau de Bord":
     try:
         # --- Achats (toujours en FCFA) ---
         tot_achats = get_val("SELECT COALESCE(SUM(total), 0) FROM achats WHERE statut != 'En attente de facturation'")
-        dette_fournisseurs = get_val("SELECT COALESCE(SUM(total - montant_avance), 0) FROM achats WHERE statut != 'En attente de facturation'")
+        dette_fournisseurs = get_val("""
+    SELECT COALESCE(SUM(
+        a.total - COALESCE(a.montant_avance, 0)
+        - COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat = a.id), 0)
+    ), 0)
+    FROM achats a WHERE a.statut != 'En attente de facturation'
+""")
         total_volume_achete = get_val("SELECT COALESCE(SUM(quantite_kg), 0) FROM achats WHERE statut != 'En attente de facturation'")
 
         # --- Ventes : regrouper par devise ---
@@ -4169,7 +4176,8 @@ elif choix == "🧾 Achats (Entrees)":
                 a.id, a.date, f.nom as Fournisseur, a.numero_de_lot as "N° Lot", 
                 a.quantite_kg as "Qte (kg)", a.prix_unitaire as PU, 
                 a.total as "Total Net (FCFA)", a.montant_avance as "Avance Versée (FCFA)", 
-                (a.total - a.montant_avance) as "Reste à Payer", a.statut as Statut, 
+                (a.total - COALESCE(a.montant_avance, 0) 
+ - COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat = a.id), 0)) as "Reste à Payer"
                 a.numero_contrat as "N° Contrat", a.poids_brut as "Poids Brut", 
                 a.poids_net as "Poids Net", f.numero_de_compte as "N° Compte Fournisseur",
                 f.id as id_fourn, a.deductions as Deductions, a.libelle_deductions as "Motif Déduction"
@@ -4446,9 +4454,11 @@ elif choix == "🧾 Achats (Entrees)":
 
         achats_dettes = fetch_all("""
             SELECT a.id, f.nom as Fournisseur, a.numero_de_lot, a.total, a.montant_avance, 
-                   (a.total - a.montant_avance) as reste_a_payer, a.numero_contrat
+                  (a.total - COALESCE(a.montant_avance, 0)
+ - COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat = a.id), 0)) as reste_a_payer, a.numero_contrat
             FROM achats a JOIN fournisseurs f ON a.id_fournisseur = f.id
-            WHERE (a.total - a.montant_avance) > 0.01 AND a.statut != 'En attente de facturation'
+            WHERE (a.total - COALESCE(a.montant_avance, 0)
+       - COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat = a.id), 0)) > 0.01 AND a.statut != 'En attente de facturation'
             ORDER BY a.id DESC
         """)
 
@@ -5819,6 +5829,587 @@ if choix == "🤝 Fournisseurs":
 
             except Exception as e:
                 st.error(f"Erreur lors de la récupération de l'historique des achats : {e}")
+elif choix == "💰 Préfinancement Fournisseurs":
+
+    # ---------- STYLES ----------
+    st.markdown("""
+        <style>
+            .pref-header {
+                background: linear-gradient(135deg, #78350f 0%, #0f172a 100%);
+                padding: 1.8rem 2rem;
+                border-radius: 16px;
+                margin-bottom: 1.5rem;
+                border: 1px solid #b45309;
+                box-shadow: 0 10px 30px -5px rgba(180, 83, 9, 0.25);
+            }
+            .pref-header h1 { color:#F8FAFC !important; font-size:1.8rem; margin:0 !important; font-weight:800; }
+            .pref-header .sub { color:#FCD34D; font-size:14px; margin-top:4px; font-weight:600; }
+            .pref-header .desc { color:#CBD5E1; font-size:13px; margin-top:10px; line-height:1.6; }
+        </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+        <div class="pref-header">
+            <h1>💰 Préfinancement des Fournisseurs</h1>
+            <div class="sub">Avances financières · Rattachement aux BR · Récupération sur facturation</div>
+            <div class="desc">
+                Une avance <b>n'est pas un achat</b>. Elle ne crée aucun mouvement de stock ni ligne
+                dans <code>achats</code>. Elle est récupérée progressivement lors de la
+                <b>facturation des BR réellement livrés</b>.
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # ---------- HELPERS ----------
+    def _get_solde_prefin(id_pref):
+        row = fetch_one("""
+            SELECT pf.montant_verse - COALESCE(SUM(ip.montant_impute), 0)
+            FROM prefinancements_fournisseurs pf
+            LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
+            WHERE pf.id = %s
+            GROUP BY pf.id, pf.montant_verse
+        """, (id_pref,))
+        return float(row[0]) if row and row[0] is not None else 0.0
+
+    def _recalc_statut_prefin(id_pref):
+        row = fetch_one("""
+            SELECT pf.montant_verse, COALESCE(SUM(ip.montant_impute), 0)
+            FROM prefinancements_fournisseurs pf
+            LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
+            WHERE pf.id = %s
+            GROUP BY pf.id, pf.montant_verse
+        """, (id_pref,))
+        if not row:
+            return None
+        verse = float(row[0] or 0)
+        impute = float(row[1] or 0)
+        if verse <= 0:
+            return 'VALIDE'
+        if impute >= verse - 0.01:
+            return 'SOLDE'
+        if impute > 0:
+            return 'PARTIELLEMENT_RECUPERE'
+        return 'VERSE'
+
+    def _update_statut_prefin(id_pref):
+        s = _recalc_statut_prefin(id_pref)
+        if s:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE prefinancements_fournisseurs SET statut=%s WHERE id=%s", (s, id_pref))
+                conn.commit()
+        return s
+
+    def _gen_reference_prefin():
+        today_str = datetime.now().strftime('%Y%m%d')
+        row = fetch_one("""
+            SELECT reference FROM prefinancements_fournisseurs
+            WHERE reference LIKE %s ORDER BY id DESC LIMIT 1
+        """, (f"PREF-{today_str}-%",))
+        if row and row[0]:
+            try:
+                next_num = int(row[0].split('-')[-1]) + 1
+            except Exception:
+                next_num = 1
+        else:
+            next_num = 1
+        return f"PREF-{today_str}-{next_num:04d}"
+
+    # ---------- TABS ----------
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "➕ Nouveau préfinancement",
+        "📊 Suivi des avances",
+        "🔗 Imputation sur achats",
+        "📜 Journal & Historique"
+    ])
+
+    # ================================================================
+    # TAB 1 : NOUVEAU PRÉFINANCEMENT
+    # ================================================================
+    with tab1:
+        st.markdown("### ➕ Créer un dossier de préfinancement")
+        st.caption("Créer la demande. Le versement effectif se fera après validation Direction.")
+
+        fournisseurs_dispo = fetch_all("SELECT id, nom FROM fournisseurs ORDER BY nom")
+
+        if not fournisseurs_dispo:
+            st.warning("⚠️ Aucun fournisseur. Créez-en un dans **🤝 Fournisseurs** d'abord.")
+        else:
+            dict_f = {f[1]: f[0] for f in fournisseurs_dispo}
+            ref_auto = _gen_reference_prefin()
+
+            with st.form("form_prefinancement", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                with c1:
+                    f_nom = st.selectbox("🏢 Fournisseur *", list(dict_f.keys()))
+                    montant_accorde = st.number_input(
+                        "💵 Montant accordé (FCFA) *",
+                        min_value=1000.0, step=50000.0, value=1000000.0
+                    )
+                with c2:
+                    st.text_input("🔖 Référence (auto)", value=ref_auto, disabled=True)
+                    conditions = st.text_area(
+                        "📝 Conditions & observations",
+                        placeholder="Ex: Avance sur 3 livraisons prévues en novembre.",
+                        height=100
+                    )
+
+                if st.form_submit_button("💾 Créer le dossier", type="primary", use_container_width=True):
+                    if montant_accorde <= 0:
+                        st.error("❌ Montant invalide.")
+                    else:
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute("""
+                                    INSERT INTO prefinancements_fournisseurs
+                                    (reference, id_fournisseur, montant_accorde, statut, observations, cree_par)
+                                    VALUES (%s,%s,%s,'EN_ATTENTE',%s,%s)
+                                """, (
+                                    ref_auto, dict_f[f_nom], montant_accorde,
+                                    conditions.strip() if conditions else None,
+                                    st.session_state.get('username', 'Agent')
+                                ))
+                                cur.execute("""
+                                    INSERT INTO documents_generes
+                                    (type_doc, reference, montant, demandeur, description, statut)
+                                    VALUES ('prefinancement',%s,%s,%s,%s,'EN_ATTENTE')
+                                """, (
+                                    ref_auto, montant_accorde,
+                                    st.session_state.get('username', 'Agent'),
+                                    f"Préfinancement {f_nom} — {montant_accorde:,.0f} FCFA"
+                                ))
+                                conn.commit()
+                            log_action(f"Création préfinancement {ref_auto}")
+                            st.success(f"✅ Dossier **{ref_auto}** créé. À valider par la Direction.")
+                            st.rerun()
+                        except Exception as e:
+                            conn.rollback()
+                            st.error(f"❌ {e}")
+
+    # ================================================================
+    # TAB 2 : SUIVI DES AVANCES
+    # ================================================================
+    with tab2:
+        st.markdown("### 📊 Suivi des préfinancements")
+
+        kpi = fetch_one("""
+            SELECT
+                COUNT(*) FILTER (WHERE statut NOT IN ('ANNULE','SOLDE')) AS nb_actifs,
+                COALESCE(SUM(montant_verse), 0) AS total_verse,
+                COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements), 0) AS total_impute
+            FROM prefinancements_fournisseurs
+        """)
+        nb_actifs = int(kpi[0] or 0) if kpi else 0
+        total_verse = float(kpi[1] or 0) if kpi else 0.0
+        total_impute = float(kpi[2] or 0) if kpi else 0.0
+        solde_global = max(0.0, total_verse - total_impute)
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("📁 Dossiers actifs", nb_actifs)
+        k2.metric("💸 Total versé", f"{total_verse:,.0f} F".replace(",", " "))
+        k3.metric("✅ Total imputé", f"{total_impute:,.0f} F".replace(",", " "))
+        k4.metric("🎯 Reste à récupérer", f"{solde_global:,.0f} F".replace(",", " "))
+
+        st.divider()
+
+        fc1, fc2 = st.columns([1, 1])
+        with fc1:
+            filtre_statut = st.multiselect(
+                "Filtrer par statut",
+                ["EN_ATTENTE","VALIDE","VERSE","PARTIELLEMENT_RECUPERE","SOLDE","ANNULE"],
+                default=["EN_ATTENTE","VALIDE","VERSE","PARTIELLEMENT_RECUPERE"]
+            )
+        with fc2:
+            recherche_f = st.text_input("🔎 Rechercher", placeholder="Référence ou fournisseur")
+
+        rows = fetch_all("""
+            SELECT pf.id, pf.reference, f.nom, pf.id_fournisseur, pf.date_creation,
+                   pf.montant_accorde, pf.montant_verse, pf.statut,
+                   COALESCE(SUM(ip.montant_impute), 0) AS impute,
+                   pf.observations, pf.valide_par
+            FROM prefinancements_fournisseurs pf
+            JOIN fournisseurs f ON pf.id_fournisseur = f.id
+            LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
+            GROUP BY pf.id, f.nom
+            ORDER BY pf.id DESC
+        """)
+
+        if not rows:
+            st.info("ℹ️ Aucun préfinancement enregistré.")
+        else:
+            rows_f = [r for r in rows if r[7] in filtre_statut and (
+                not recherche_f or recherche_f.lower() in (r[1] or "").lower()
+                or recherche_f.lower() in (r[2] or "").lower()
+            )]
+
+            if not rows_f:
+                st.warning("Aucun dossier pour ces critères.")
+            else:
+                statut_labels = {
+                    'EN_ATTENTE': ('⏳', 'En attente de validation'),
+                    'VALIDE': ('✅', 'Validé — à verser'),
+                    'VERSE': ('💸', 'Versé — non imputé'),
+                    'PARTIELLEMENT_RECUPERE': ('🔄', 'Partiellement récupéré'),
+                    'SOLDE': ('🎯', 'Soldé'),
+                    'ANNULE': ('❌', 'Annulé'),
+                }
+
+                for r in rows_f:
+                    (id_pf, ref, fourn, id_f, date_c, accorde, verse, statut,
+                     impute, obs, valide_par) = r
+                    accorde = float(accorde or 0)
+                    verse = float(verse or 0)
+                    impute = float(impute or 0)
+                    solde = max(0.0, verse - impute)
+                    pct = (impute / verse * 100) if verse > 0 else 0.0
+                    icone, label = statut_labels.get(statut, ('❓', statut))
+
+                    with st.expander(
+                        f"{icone} **{ref}** — {fourn} — Versé: {verse:,.0f} F | Solde: {solde:,.0f} F",
+                        expanded=False
+                    ):
+                        ce1, ce2, ce3 = st.columns([2, 1, 1])
+                        ce1.markdown(f"**Statut :** {icone} {label}")
+                        ce2.metric("Accordé", f"{accorde:,.0f} F")
+                        ce3.metric("Versé", f"{verse:,.0f} F")
+
+                        st.markdown(f"**Récupération : {impute:,.0f} F / {verse:,.0f} F ({pct:.1f}%)**")
+                        st.progress(min(1.0, pct / 100.0))
+                        st.caption(f"📅 Créé le {date_c} · 📝 {obs or '—'} · ✅ Validé par {valide_par or '—'}")
+                        st.divider()
+
+                        if statut == 'EN_ATTENTE':
+                            st.info("⏳ En attente de validation Direction.")
+                            if st.session_state.role == "Admin":
+                                cv1, cv2 = st.columns(2)
+                                if cv1.button("✅ Valider (Admin)", key=f"val_{id_pf}", use_container_width=True):
+                                    with conn.cursor() as cur:
+                                        cur.execute("""
+                                            UPDATE prefinancements_fournisseurs
+                                            SET statut='VALIDE', valide_par=%s, date_validation=NOW()
+                                            WHERE id=%s
+                                        """, (st.session_state.get('username','Admin'), id_pf))
+                                        cur.execute("""
+                                            UPDATE documents_generes
+                                            SET statut='VALIDE', signataire=%s, date_signature=NOW()
+                                            WHERE reference=%s AND type_doc='prefinancement'
+                                        """, (st.session_state.get('username','Admin'), ref))
+                                        conn.commit()
+                                    st.rerun()
+                                if cv2.button("❌ Annuler", key=f"ann_{id_pf}", use_container_width=True):
+                                    with conn.cursor() as cur:
+                                        cur.execute("UPDATE prefinancements_fournisseurs SET statut='ANNULE' WHERE id=%s", (id_pf,))
+                                        conn.commit()
+                                    st.rerun()
+
+                        elif statut == 'VALIDE':
+                            st.info("✅ Validé — enregistrez le versement.")
+                            with st.form(f"form_vers_{id_pf}"):
+                                v1, v2 = st.columns(2)
+                                with v1:
+                                    mt_vers = st.number_input(
+                                        "Montant versé *",
+                                        min_value=0.0, max_value=accorde,
+                                        value=accorde, step=10000.0
+                                    )
+                                    mode = st.selectbox("Mode", ["Virement bancaire","Espèces","Chèque","Mobile Money","Autre"])
+                                with v2:
+                                    dt_vers = st.date_input("Date", value=date.today())
+                                    ref_vir = st.text_input("Référence / pièce", placeholder="VIR-2026-XXXX")
+                                if st.form_submit_button("💸 Confirmer le versement", type="primary", use_container_width=True):
+                                    if mt_vers <= 0:
+                                        st.error("❌ Montant invalide.")
+                                    else:
+                                        try:
+                                            ref_mvt = f"MVT-VER-{id_pf}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                            with conn.cursor() as cur:
+                                                cur.execute("""
+                                                    UPDATE prefinancements_fournisseurs
+                                                    SET montant_verse=%s, statut='VERSE' WHERE id=%s
+                                                """, (mt_vers, id_pf))
+                                                cur.execute("""
+                                                    INSERT INTO mouvements_prefinancements
+                                                    (id_prefinancement, type_mouvement, montant, reference_operation,
+                                                     commentaire, cree_par)
+                                                    VALUES (%s,'VERSEMENT',%s,%s,%s,%s)
+                                                """, (
+                                                    id_pf, mt_vers, ref_mvt,
+                                                    f"Mode: {mode} | Date: {dt_vers} | Réf: {ref_vir or 'N/A'}",
+                                                    st.session_state.get('username','Agent')
+                                                ))
+                                                conn.commit()
+                                            log_action(f"Versement préfinancement {ref} : {mt_vers:,.0f} FCFA")
+                                            st.success("✅ Versement enregistré.")
+                                            st.balloons()
+                                            st.rerun()
+                                        except Exception as e:
+                                            conn.rollback()
+                                            st.error(f"❌ {e}")
+
+                        elif statut in ('VERSE', 'PARTIELLEMENT_RECUPERE'):
+                            st.success(f"💰 Solde disponible : **{solde:,.0f} FCFA**")
+                            imputations = fetch_all("""
+                                SELECT ip.id_achat, a.numero_de_lot, ip.montant_impute, ip.date_imputation
+                                FROM imputations_prefinancements ip
+                                JOIN achats a ON ip.id_achat = a.id
+                                WHERE ip.id_prefinancement=%s
+                                ORDER BY ip.date_imputation DESC
+                            """, (id_pf,))
+                            if imputations:
+                                df_i = pd.DataFrame(imputations, columns=["ID Achat","N° Lot","Montant","Date"])
+                                st.dataframe(df_i[["N° Lot","Montant","Date"]], use_container_width=True,
+                                             hide_index=True,
+                                             column_config={"Montant": st.column_config.NumberColumn(format="%d FCFA")})
+                            else:
+                                st.info("ℹ️ Aucune imputation encore.")
+                            st.caption("👉 Voir onglet **🔗 Imputation sur achats**.")
+
+                            with st.expander("💵 Enregistrer un remboursement du fournisseur"):
+                                with st.form(f"remb_{id_pf}"):
+                                    r1, r2 = st.columns(2)
+                                    with r1:
+                                        mt_remb = st.number_input("Montant remboursé", min_value=0.01,
+                                                                  max_value=float(solde), step=10000.0)
+                                    with r2:
+                                        ref_remb = st.text_input("Référence / Justificatif")
+                                    motif_remb = st.text_input("Motif")
+                                    if st.form_submit_button("💵 Enregistrer", use_container_width=True):
+                                        try:
+                                            ref_mvt = f"MVT-REM-{id_pf}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                            with conn.cursor() as cur:
+                                                cur.execute("""
+                                                    UPDATE prefinancements_fournisseurs
+                                                    SET montant_verse = montant_verse - %s WHERE id=%s
+                                                """, (mt_remb, id_pf))
+                                                cur.execute("""
+                                                    INSERT INTO mouvements_prefinancements
+                                                    (id_prefinancement, type_mouvement, montant, reference_operation,
+                                                     commentaire, cree_par)
+                                                    VALUES (%s,'REMBOURSEMENT',%s,%s,%s,%s)
+                                                """, (
+                                                    id_pf, mt_remb, ref_mvt,
+                                                    f"Motif: {motif_remb or 'N/A'} | Réf: {ref_remb or 'N/A'}",
+                                                    st.session_state.get('username','Agent')
+                                                ))
+                                                conn.commit()
+                                            _update_statut_prefin(id_pf)
+                                            log_action(f"Remboursement préfinancement {ref} : {mt_remb:,.0f} FCFA")
+                                            st.rerun()
+                                        except Exception as e:
+                                            conn.rollback()
+                                            st.error(f"❌ {e}")
+
+                        elif statut == 'SOLDE':
+                            st.success("🎯 Préfinancement totalement récupéré.")
+
+                        elif statut == 'ANNULE':
+                            st.error("❌ Dossier annulé.")
+
+    # ================================================================
+    # TAB 3 : IMPUTATION SUR ACHATS
+    # ================================================================
+    with tab3:
+        st.markdown("### 🔗 Imputation des avances sur les achats facturés")
+        st.caption("Sélectionnez un fournisseur préfinancé, puis imputez son avance sur les BR facturés.")
+
+        fournisseurs_avec_prefin = fetch_all("""
+            SELECT DISTINCT f.id, f.nom
+            FROM fournisseurs f
+            JOIN prefinancements_fournisseurs pf ON pf.id_fournisseur = f.id
+            WHERE pf.statut IN ('VERSE','PARTIELLEMENT_RECUPERE')
+            ORDER BY f.nom
+        """)
+
+        if not fournisseurs_avec_prefin:
+            st.info("ℹ️ Aucun fournisseur n'a de préfinancement en cours avec solde disponible.")
+        else:
+            dict_f_prefin = {f[1]: f[0] for f in fournisseurs_avec_prefin}
+            fourn_choisi = st.selectbox("🏢 Fournisseur", list(dict_f_prefin.keys()), key="imput_f")
+            id_f_imput = dict_f_prefin[fourn_choisi]
+
+            prefins_ouverts = fetch_all("""
+                SELECT pf.id, pf.reference, pf.montant_verse,
+                       COALESCE(SUM(ip.montant_impute), 0) AS impute
+                FROM prefinancements_fournisseurs pf
+                LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
+                WHERE pf.id_fournisseur=%s AND pf.statut IN ('VERSE','PARTIELLEMENT_RECUPERE')
+                GROUP BY pf.id
+                HAVING pf.montant_verse - COALESCE(SUM(ip.montant_impute),0) > 0.01
+                ORDER BY pf.date_creation ASC
+            """, (id_f_imput,))
+
+            achats_ouverts = fetch_all("""
+                SELECT a.id, a.numero_de_lot, a.numero_contrat, a.date,
+                       a.total, COALESCE(a.montant_avance,0) AS avance,
+                       COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat=a.id),0) AS deja_impute
+                FROM achats a
+                WHERE a.id_fournisseur=%s AND a.statut != 'En attente de facturation'
+                  AND (a.total - COALESCE(a.montant_avance,0)
+                       - COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat=a.id),0)) > 0.01
+                ORDER BY a.date ASC
+            """, (id_f_imput,))
+
+            col_p, col_a = st.columns(2)
+            dict_prefins = {}
+            dict_achats = {}
+
+            with col_p:
+                st.markdown("#### 💰 Préfinancements disponibles")
+                if not prefins_ouverts:
+                    st.warning("Aucun préfinancement ouvert.")
+                else:
+                    for pf in prefins_ouverts:
+                        s = float(pf[2]) - float(pf[3])
+                        lbl = f"{pf[1]} — {s:,.0f} F"
+                        dict_prefins[lbl] = {'id': pf[0], 'solde': s}
+                        st.markdown(f"""
+                            <div style="background:#F0FDF4;border-left:4px solid #16A34A;
+                                        padding:10px 14px;border-radius:8px;margin-bottom:8px;">
+                                <div style="font-weight:700;color:#065F46;font-size:13px;">{pf[1]}</div>
+                                <div style="color:#16A34A;font-size:12px;">Solde : <b>{s:,.0f} FCFA</b></div>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+            with col_a:
+                st.markdown("#### 🧾 Achats à imputer")
+                if not achats_ouverts:
+                    st.success("✅ Aucun achat à imputer.")
+                else:
+                    for ac in achats_ouverts:
+                        reste = float(ac[4]) - float(ac[5]) - float(ac[6])
+                        lbl = f"Lot {ac[1]} — {reste:,.0f} F"
+                        dict_achats[lbl] = {'id': ac[0], 'reste': reste}
+                        st.markdown(f"""
+                            <div style="background:#FEF3C7;border-left:4px solid #F59E0B;
+                                        padding:10px 14px;border-radius:8px;margin-bottom:8px;">
+                                <div style="font-weight:700;color:#78350F;font-size:13px;">Lot {ac[1]}</div>
+                                <div style="color:#B45309;font-size:11px;">Total : {float(ac[4]):,.0f} F | Avance post-BR : {float(ac[5]):,.0f} F</div>
+                                <div style="color:#92400E;font-size:12px;font-weight:700;">Reste : {reste:,.0f} FCFA</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+            if dict_prefins and dict_achats:
+                st.divider()
+                st.markdown("#### 🎯 Réaliser une imputation")
+                with st.form("form_imputation", clear_on_submit=True):
+                    i1, i2 = st.columns(2)
+                    with i1:
+                        pl = st.selectbox("💰 Préfinancement", list(dict_prefins.keys()))
+                        id_p = dict_prefins[pl]['id']; sol_p = dict_prefins[pl]['solde']
+                    with i2:
+                        al = st.selectbox("🧾 Achat", list(dict_achats.keys()))
+                        id_a = dict_achats[al]['id']; sol_a = dict_achats[al]['reste']
+
+                    mt_max = min(sol_p, sol_a)
+                    st.info(f"💡 Maximum imputable : **{mt_max:,.0f} FCFA**")
+                    mt = st.number_input("Montant à imputer *", min_value=0.0,
+                                         max_value=float(mt_max), value=float(mt_max), step=10000.0)
+                    comm = st.text_input("Commentaire (optionnel)")
+
+                    if st.form_submit_button("🔗 Valider l'imputation", type="primary", use_container_width=True):
+                        if mt <= 0:
+                            st.error("❌ Montant invalide.")
+                        elif mt > mt_max:
+                            st.error(f"❌ Dépasse le maximum ({mt_max:,.0f} F).")
+                        else:
+                            try:
+                                existing = fetch_one("""
+                                    SELECT id FROM imputations_prefinancements
+                                    WHERE id_prefinancement=%s AND id_achat=%s
+                                """, (id_p, id_a))
+                                if existing:
+                                    st.error("❌ Imputation déjà existante pour ce couple.")
+                                else:
+                                    ref_mvt = f"MVT-IMP-{id_p}-{id_a}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                    with conn.cursor() as cur:
+                                        cur.execute("""
+                                            INSERT INTO imputations_prefinancements
+                                            (id_prefinancement, id_achat, montant_impute, cree_par)
+                                            VALUES (%s,%s,%s,%s)
+                                        """, (id_p, id_a, mt, st.session_state.get('username','Agent')))
+                                        cur.execute("""
+                                            INSERT INTO mouvements_prefinancements
+                                            (id_prefinancement, type_mouvement, montant, reference_operation,
+                                             id_achat, commentaire, cree_par)
+                                            VALUES (%s,'IMPUTATION',%s,%s,%s,%s,%s)
+                                        """, (id_p, mt, ref_mvt, id_a,
+                                              comm or f"Imputation sur achat #{id_a}",
+                                              st.session_state.get('username','Agent')))
+                                        conn.commit()
+                                    new_s = _update_statut_prefin(id_p)
+                                    log_action(f"Imputation {id_p}→{id_a} : {mt:,.0f} FCFA")
+                                    st.success(f"✅ Imputé {mt:,.0f} FCFA · Statut : {new_s}")
+                                    st.balloons()
+                                    st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"❌ {e}")
+
+    # ================================================================
+    # TAB 4 : JOURNAL
+    # ================================================================
+    with tab4:
+        st.markdown("### 📜 Journal des mouvements de préfinancement")
+
+        jc1, jc2, jc3 = st.columns(3)
+        with jc1:
+            filtres_t = st.multiselect("Type", ["VERSEMENT","IMPUTATION","REMBOURSEMENT","ANNULATION_IMPUTATION"],
+                                       default=["VERSEMENT","IMPUTATION","REMBOURSEMENT"])
+        with jc2:
+            filtres_ref = st.text_input("Référence", placeholder="PREF-2026...")
+        with jc3:
+            per = st.date_input("Période", value=(date.today()-timedelta(days=90), date.today()), key="jr_pref")
+
+        q = """
+            SELECT mp.id, pf.reference, f.nom, mp.type_mouvement, mp.montant,
+                   mp.reference_operation, a.numero_de_lot,
+                   TO_CHAR(mp.date_operation,'DD/MM/YYYY HH24:MI'), mp.commentaire, mp.cree_par
+            FROM mouvements_prefinancements mp
+            JOIN prefinancements_fournisseurs pf ON mp.id_prefinancement = pf.id
+            JOIN fournisseurs f ON pf.id_fournisseur = f.id
+            LEFT JOIN achats a ON mp.id_achat = a.id
+            WHERE 1=1
+        """
+        p = []
+        if filtres_t:
+            q += f" AND mp.type_mouvement IN ({','.join(['%s']*len(filtres_t))})"
+            p.extend(filtres_t)
+        if filtres_ref:
+            q += " AND pf.reference ILIKE %s"; p.append(f"%{filtres_ref}%")
+        if isinstance(per, tuple) and len(per) == 2:
+            q += " AND mp.date_operation >= %s AND mp.date_operation <= %s"
+            p.extend([per[0].strftime("%Y-%m-%d 00:00:00"), per[1].strftime("%Y-%m-%d 23:59:59")])
+        q += " ORDER BY mp.date_operation DESC LIMIT 500"
+
+        df_j = get_dataframe_from_query(q, p)
+        if df_j.empty:
+            st.info("ℹ️ Aucun mouvement.")
+        else:
+            tot_v = df_j[df_j['type_mouvement']=='VERSEMENT']['montant'].sum()
+            tot_i = df_j[df_j['type_mouvement']=='IMPUTATION']['montant'].sum()
+            tot_r = df_j[df_j['type_mouvement']=='REMBOURSEMENT']['montant'].sum()
+            jk1, jk2, jk3, jk4 = st.columns(4)
+            jk1.metric("📋 Mouvements", len(df_j))
+            jk2.metric("💸 Versements", f"{tot_v:,.0f} F")
+            jk3.metric("🔗 Imputations", f"{tot_i:,.0f} F")
+            jk4.metric("↩️ Remboursements", f"{tot_r:,.0f} F")
+
+            df_d = df_j.rename(columns={
+                'reference':'Préfinancement', 'nom':'Fournisseur', 'type_mouvement':'Type',
+                'montant':'Montant', 'reference_operation':'Réf. Op.', 'numero_de_lot':'Lot',
+                'to_char':'Date', 'commentaire':'Commentaire', 'cree_par':'Opérateur'
+            })
+            # Renommer dynamiquement la colonne de date (nom PostgreSQL variable)
+            date_cols = [c for c in df_d.columns if 'Date' in str(c) or 'to_char' in str(c)]
+            if date_cols:
+                df_d = df_d.rename(columns={date_cols[0]: 'Date'})
+
+            st.dataframe(df_d, use_container_width=True, hide_index=True,
+                         column_config={"Montant": st.column_config.NumberColumn(format="%d FCFA")})
+
+            st.download_button("📥 Exporter CSV",
+                               df_d.to_csv(index=False).encode('utf-8'),
+                               f"journal_prefinancements_{datetime.now().strftime('%Y%m%d')}.csv",
+                               "text/csv", use_container_width=True)
 
 elif choix == "👥 Clients":
     st.title("👥 Répertoire des Clients Internationaux")
@@ -10093,6 +10684,7 @@ elif choix == "⚙️ Administration & Backup":
             "🛍️ Ventes (Sorties)",
             "👥 Clients",
             "🤝 Fournisseurs",
+            "💰 Préfinancement Fournisseurs",
             "🏗️ Prestataires & Transitaires",
             "📝 Contrats",
             "🏪 Magasins",
