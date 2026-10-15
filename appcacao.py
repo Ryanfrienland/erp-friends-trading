@@ -5605,6 +5605,7 @@ if choix == "🤝 Fournisseurs":
             st.info("Aucun fournisseur à modifier.")
 
     # ============================================================
+    # ============================================================
     # TAB 4 : COMPTES DE PAIEMENT
     # ============================================================
     with tab4:
@@ -5625,18 +5626,14 @@ if choix == "🤝 Fournisseurs":
             with col_left:
                 st.markdown("##### ➕ Lier un nouveau compte")
 
-                if "selected_type" not in st.session_state:
-                    st.session_state.selected_type = "Mobile Money"
+                # 👇 ON SORT LE SELECTBOX DU FORMULAIRE ICI
+                type_c = st.selectbox(
+                    "Type de compte",
+                    ["Mobile Money", "Bancaire"],
+                    key="type_select_outside"
+                )
 
-                with st.form("form_add_payment_acc", clear_on_submit=False):
-                    type_c = st.selectbox(
-                        "Type de compte",
-                        ["Mobile Money", "Bancaire"],
-                        index=0 if st.session_state.selected_type == "Mobile Money" else 1,
-                        key="type_select"
-                    )
-                    st.session_state.selected_type = type_c
-
+                with st.form("form_add_payment_acc", clear_on_submit=True):
                     inst = ""
                     num_c = ""
                     titulaire_c = ""
@@ -5671,38 +5668,6 @@ if choix == "🤝 Fournisseurs":
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Erreur lors de l'enregistrement : {e}")
-
-            with col_right:
-                st.markdown("##### 📋 Comptes de paiement actifs")
-                try:
-                    df_comptes = get_dataframe_from_query("""
-                        SELECT id, type_compte AS "Type", nom_institution AS "Institution", numero_compte AS "Numéro / Tél", titulaire AS "Titulaire"
-                        FROM comptes_fournisseurs
-                        WHERE id_fournisseur = %s
-                    """, (id_f_selected,))
-
-                    if df_comptes.empty:
-                        st.info("Ce fournisseur utilise uniquement son compte principal.")
-                    else:
-                        st.dataframe(df_comptes.drop(columns=['id']), use_container_width=True, hide_index=True)
-                        
-                        st.markdown("---")
-                        st.markdown("**🗑️ Supprimer un moyen de paiement :**")
-                        
-                        dict_del_acc = {f"{row[1]} ({row[2]}) - {row[3]}": row[0] for row in df_comptes.values.tolist()}
-                        acc_to_del = st.selectbox("Sélectionner le compte à détruire", list(dict_del_acc.keys()), key="del_acc_selectbox")
-                        
-                        if st.button("🗑️ Supprimer ce compte définitivement", type="primary", use_container_width=True):
-                            id_acc_del = dict_del_acc[acc_to_del]
-                            with conn.cursor() as cur:
-                                cur.execute("DELETE FROM comptes_fournisseurs WHERE id = %s", (id_acc_del,))
-                                conn.commit()
-                            log_action(f"Moyen de paiement ID {id_acc_del} supprimé")
-                            st.success("Compte de paiement retiré avec succès !")
-                            st.rerun()
-                except Exception as e:
-                    st.error(f"Erreur lors de la lecture des comptes : {e}")
-
     # ============================================================
     # TAB 5 : SUPPRESSION DE FOURNISSEUR
     # ============================================================
