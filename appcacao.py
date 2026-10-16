@@ -6357,13 +6357,13 @@ elif choix == "💰 Préfinancement Fournisseurs":
                                         cur.execute("""
                                             INSERT INTO imputations_prefinancements
                                             (id_prefinancement, id_achat, montant_impute)
-                                            VALUES (%s,%s,%s,%s)
+                                            VALUES (%s,%s,%s)
                                         """, (id_p, id_a, mt))
                                         cur.execute("""
                                             INSERT INTO mouvements_prefinancements
                                             (id_prefinancement, type_mouvement, montant, reference_operation,
                                              id_achat, commentaire)
-                                            VALUES (%s,'IMPUTATION',%s,%s,%s,%s,%s)
+                                            VALUES (%s,'IMPUTATION',%s,%s,%s,%s)
                                         """, (id_p, mt, ref_mvt, id_a,
                                               comm or f"Imputation sur achat #{id_a}"
                                             ))
