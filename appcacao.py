@@ -5954,37 +5954,47 @@ elif choix == "💰 Préfinancement Fournisseurs":
                     )
 
                 if st.form_submit_button("💾 Créer le dossier", type="primary", use_container_width=True):
+                   # Dans TAB 1, remplacer tout le bloc INSERT par :
+
                     if montant_accorde <= 0:
                         st.error("❌ Montant invalide.")
                     else:
                         try:
                             with conn.cursor() as cur:
+                                # On crée directement le dossier avec le versement
                                 cur.execute("""
                                     INSERT INTO prefinancements_fournisseurs
-                                    (reference, id_fournisseur, montant_accorde, statut, observations, cree_par)
-                                    VALUES (%s,%s,%s,'EN_ATTENTE',%s,%s)
+                                    (reference, id_fournisseur, montant_accorde, montant_verse, 
+                                     statut, observations, cree_par, valide_par, date_validation)
+                                    VALUES (%s,%s,%s,%s,'VERSE',%s,%s,%s,NOW())
+                                    RETURNING id
                                 """, (
-                                    ref_auto, dict_f[f_nom], montant_accorde,
+                                    ref_auto, dict_f[f_nom], montant_accorde, montant_accorde,
                                     conditions.strip() if conditions else None,
+                                    st.session_state.get('username', 'Agent'),
                                     st.session_state.get('username', 'Agent')
                                 ))
+                                id_pref = cur.fetchone()[0]
+                                
+                                # Enregistrer le mouvement de versement dans le journal
+                                ref_mvt = f"MVT-VER-{id_pref}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                 cur.execute("""
-                                    INSERT INTO documents_generes
-                                    (type_doc, reference, montant, demandeur, description, statut)
-                                    VALUES ('prefinancement',%s,%s,%s,%s,'EN_ATTENTE')
+                                    INSERT INTO mouvements_prefinancements
+                                    (id_prefinancement, type_mouvement, montant, reference_operation,
+                                     commentaire, cree_par)
+                                    VALUES (%s,'VERSEMENT',%s,%s,%s,%s)
                                 """, (
-                                    ref_auto, montant_accorde,
-                                    st.session_state.get('username', 'Agent'),
-                                    f"Préfinancement {f_nom} — {montant_accorde:,.0f} FCFA"
+                                    id_pref, montant_accorde, ref_mvt,
+                                    "Versement initial à la création du dossier",
+                                    st.session_state.get('username', 'Agent')
                                 ))
                                 conn.commit()
-                            log_action(f"Création préfinancement {ref_auto}")
-                            st.success(f"✅ Dossier **{ref_auto}** créé. À valider par la Direction.")
+                            log_action(f"Création préfinancement {ref_auto} ({montant_accorde:,.0f} FCFA)")
+                            st.success(f"✅ Dossier **{ref_auto}** créé et versé ({montant_accorde:,.0f} FCFA).")
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
                             st.error(f"❌ {e}")
-
     # ================================================================
     # TAB 2 : SUIVI DES AVANCES
     # ================================================================
