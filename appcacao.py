@@ -6356,17 +6356,17 @@ elif choix == "💰 Préfinancement Fournisseurs":
                                     with conn.cursor() as cur:
                                         cur.execute("""
                                             INSERT INTO imputations_prefinancements
-                                            (id_prefinancement, id_achat, montant_impute, cree_par)
+                                            (id_prefinancement, id_achat, montant_impute)
                                             VALUES (%s,%s,%s,%s)
-                                        """, (id_p, id_a, mt, st.session_state.get('username','Agent')))
+                                        """, (id_p, id_a, mt))
                                         cur.execute("""
                                             INSERT INTO mouvements_prefinancements
                                             (id_prefinancement, type_mouvement, montant, reference_operation,
-                                             id_achat, commentaire, cree_par)
+                                             id_achat, commentaire)
                                             VALUES (%s,'IMPUTATION',%s,%s,%s,%s,%s)
                                         """, (id_p, mt, ref_mvt, id_a,
-                                              comm or f"Imputation sur achat #{id_a}",
-                                              st.session_state.get('username','Agent')))
+                                              comm or f"Imputation sur achat #{id_a}"
+                                            ))
                                         conn.commit()
                                     new_s = _update_statut_prefin(id_p)
                                     log_action(f"Imputation {id_p}→{id_a} : {mt:,.0f} FCFA")
