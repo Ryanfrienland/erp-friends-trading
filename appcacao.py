@@ -4173,16 +4173,36 @@ elif choix == "🧾 Achats (Entrees)":
         # Utilisation de get_dataframe_from_query pour éviter SQLAlchemy
         df = get_dataframe_from_query("""
             SELECT 
-                a.id, a.date, f.nom as Fournisseur, a.numero_de_lot as "N° Lot", 
-                a.quantite_kg as "Qte (kg)", a.prix_unitaire as PU, 
-                a.total as "Total Net (FCFA)", a.montant_avance as "Avance Versée (FCFA)", 
-                (a.total - COALESCE(a.montant_avance, 0) 
- - COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat = a.id), 0)) as "Reste à Payer"
-                a.numero_contrat as "N° Contrat", a.poids_brut as "Poids Brut", 
-                a.poids_net as "Poids Net", f.numero_de_compte as "N° Compte Fournisseur",
-                f.id as id_fourn, a.deductions as Deductions, a.libelle_deductions as "Motif Déduction"
-            FROM achats a JOIN fournisseurs f ON a.id_fournisseur = f.id
-            WHERE a.statut != 'En attente de facturation' ORDER BY a.id DESC
+                a.id, 
+                a.date, 
+                f.nom AS "Fournisseur", 
+                a.numero_de_lot AS "N° Lot", 
+                a.quantite_kg AS "Qte (kg)", 
+                a.prix_unitaire AS "PU", 
+                a.total AS "Total Net (FCFA)", 
+                (COALESCE(a.montant_avance, 0) 
+                 + COALESCE((SELECT SUM(ip.montant_impute) 
+                             FROM imputations_prefinancements ip 
+                             WHERE ip.id_achat = a.id), 0)
+                ) AS "Avance Versée (FCFA)", 
+                (a.total 
+                 - COALESCE(a.montant_avance, 0) 
+                 - COALESCE((SELECT SUM(ip.montant_impute) 
+                             FROM imputations_prefinancements ip 
+                             WHERE ip.id_achat = a.id), 0)
+                ) AS "Reste à Payer", 
+                a.statut AS "Statut", 
+                a.numero_contrat AS "N° Contrat", 
+                a.poids_brut AS "Poids Brut", 
+                a.poids_net AS "Poids Net", 
+                f.numero_de_compte AS "N° Compte Fournisseur",
+                f.id AS "id_fourn", 
+                a.deductions AS "Deductions", 
+                a.libelle_deductions AS "Motif Déduction"
+            FROM achats a 
+            JOIN fournisseurs f ON a.id_fournisseur = f.id
+            WHERE a.statut != 'En attente de facturation' 
+            ORDER BY a.id DESC
         """)
 
         if not df.empty:
