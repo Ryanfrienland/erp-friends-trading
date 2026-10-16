@@ -6247,7 +6247,7 @@ elif choix == "💰 Préfinancement Fournisseurs":
                 WHERE pf.id_fournisseur=%s AND pf.statut IN ('VERSE','PARTIELLEMENT_RECUPERE')
                 GROUP BY pf.id
                 HAVING pf.montant_verse - COALESCE(SUM(ip.montant_impute),0) > 0.01
-                ORDER BY pf.date_operation ASC
+                ORDER BY pf.date_creation ASC
             """, (id_f_imput,))
 
             achats_ouverts = fetch_all("""
