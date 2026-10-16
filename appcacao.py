@@ -4160,11 +4160,134 @@ elif choix == "🧾 Achats (Entrees)":
                             log_action(log_msg)
                             st.session_state.dernier_achat_traite = empreinte_achat
                             st.success(f"✅ Lot {ndl} facturé ! Reste à payer : {total_net - mt_avance:,.0f} FCFA")
+                            
+                            # 🆕 Détecter un préfinancement disponible pour ce fournisseur
+                            if id_f:
+                                prefins_dispo = fetch_all("""
+                                    SELECT pf.id, pf.reference,
+                                           pf.montant_verse - COALESCE(SUM(ip.montant_impute), 0) AS solde
+                                    FROM prefinancements_fournisseurs pf
+                                    LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
+                                    WHERE pf.id_fournisseur = %s
+                                      AND pf.statut IN ('VERSE', 'PARTIELLEMENT_RECUPERE')
+                                    GROUP BY pf.id
+                                    HAVING pf.montant_verse - COALESCE(SUM(ip.montant_impute), 0) > 0.01
+                                """, (id_f,))
+                            
+                                if prefins_dispo:
+                                    st.session_state["pre_fin_proposition"] = {
+                                        "id_achat": id_achat_br if type_achat == "📥 Facturer un BR / Pesée en attente" else None,
+                                        "total_achat": total_net,
+                                        "fourn_nom": nom_f,
+                                        "prefins": prefins_dispo
+                                    }
+                            
                             st.rerun()
 
                         except Exception as e:
                             conn.rollback()
                             st.error(f"❌ Erreur critique lors de la transaction : {e}")
+        # ============================================================
+        # 🆕 DÉTECTION AUTOMATIQUE DE PRÉFINANCEMENT APRÈS FACTURATION
+        # ============================================================
+        prop = st.session_state.get("pre_fin_proposition")
+        if prop:
+            with st.container(border=True):
+                st.markdown("### 💰 Préfinancement détecté pour ce fournisseur")
+                st.info(
+                    f"Le fournisseur **{prop['fourn_nom']}** dispose d'un préfinancement "
+                    f"en cours. Voulez-vous imputer le montant de cet achat sur l'avance ?"
+                )
+
+                c_achat, c_prefin = st.columns(2)
+                with c_achat:
+                    st.metric("Montant à imputer (achat)",
+                              f"{prop['total_achat']:,.0f} FCFA")
+                with c_prefin:
+                    st.metric("Préfinancements disponibles",
+                              f"{len(prop['prefins'])}")
+
+                # Choix du préfinancement
+                options_prefin = {
+                    f"{p[1]} — Solde : {float(p[2]):,.0f} FCFA": p
+                    for p in prop['prefins']
+                }
+                choix_pf_lbl = st.selectbox(
+                    "Sélectionner le préfinancement à utiliser",
+                    list(options_prefin.keys()),
+                    key="pre_fin_choice"
+                )
+                pf = options_prefin[choix_pf_lbl]
+                id_pref = pf[0]
+                solde_pf = float(pf[2])
+
+                mt_a_imputer = st.number_input(
+                    "Montant à imputer *",
+                    min_value=0.0,
+                    max_value=float(min(solde_pf, prop['total_achat'])),
+                    value=float(min(solde_pf, prop['total_achat'])),
+                    step=10000.0,
+                    key="pre_fin_montant"
+                )
+
+                col_ok, col_no = st.columns(2)
+                with col_ok:
+                    if st.button("✅ Confirmer l'imputation", type="primary", use_container_width=True, key="btn_imput_conf"):
+                        try:
+                            ref_mvt = f"MVT-IMP-{id_pref}-{prop['id_achat']}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            with conn.cursor() as cur:
+                                cur.execute("""
+                                    INSERT INTO imputations_prefinancements
+                                    (id_prefinancement, id_achat, montant_impute)
+                                    VALUES (%s,%s,%s)
+                                """, (id_pref, prop['id_achat'], mt_a_imputer))
+                                cur.execute("""
+                                    INSERT INTO mouvements_prefinancements
+                                    (id_prefinancement, type_mouvement, montant, reference_operation,
+                                     id_achat, commentaire)
+                                    VALUES (%s,'IMPUTATION',%s,%s,%s,%s)
+                                """, (id_pref, mt_a_imputer, ref_mvt, prop['id_achat'],
+                                      f"Imputation automatique après facturation BR"))
+                                conn.commit()
+
+                            # Mettre à jour le statut du préfinancement
+                            with conn.cursor() as cur:
+                                cur.execute("""
+                                    SELECT pf.montant_verse, COALESCE(SUM(ip.montant_impute), 0)
+                                    FROM prefinancements_fournisseurs pf
+                                    LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
+                                    WHERE pf.id = %s
+                                    GROUP BY pf.id, pf.montant_verse
+                                """, (id_pref,))
+                                row_s = cur.fetchone()
+                                if row_s:
+                                    verse = float(row_s[0] or 0)
+                                    impute = float(row_s[1] or 0)
+                                    if impute >= verse - 0.01:
+                                        new_st = 'SOLDE'
+                                    elif impute > 0:
+                                        new_st = 'PARTIELLEMENT_RECUPERE'
+                                    else:
+                                        new_st = 'VERSE'
+                                    cur.execute(
+                                        "UPDATE prefinancements_fournisseurs SET statut=%s WHERE id=%s",
+                                        (new_st, id_pref)
+                                    )
+                                    conn.commit()
+
+                            st.success(f"✅ {mt_a_imputer:,.0f} FCFA imputés sur le préfinancement.")
+                            log_action(f"Imputation auto {mt_a_imputer:,.0f} FCFA — achat #{prop['id_achat']} sur préfinancement #{id_pref}")
+                            st.session_state.pop("pre_fin_proposition", None)
+                            st.balloons()
+                            st.rerun()
+                        except Exception as e:
+                            conn.rollback()
+                            st.error(f"❌ Erreur d'imputation : {e}")
+
+                with col_no:
+                    if st.button("⏭️ Ignorer pour cette fois", use_container_width=True, key="btn_imput_skip"):
+                        st.session_state.pop("pre_fin_proposition", None)
+                        st.rerun()
 
     # ==========================================
     # TAB 2 : HISTORIQUE GÉNÉRAL
