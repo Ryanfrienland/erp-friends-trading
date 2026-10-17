@@ -3520,7 +3520,23 @@ if choix == "🏠 Tableau de Bord":
             f2.metric("Revenus (Ventes)", "0 FCFA")
 
         # Dette Fournisseurs – toujours en FCFA
-        f3.metric("Dette Fournisseurs", f"{dette_fournisseurs:,.0f} FCFA".replace(",", " "), delta="-Engagements", delta_color="inverse")
+        avances_prefin = get_val("""
+            SELECT COALESCE(SUM(pf.montant_verse - COALESCE((
+                SELECT SUM(montant_impute) FROM imputations_prefinancements
+                WHERE id_prefinancement = pf.id
+            ), 0)), 0)
+            FROM prefinancements_fournisseurs pf
+            WHERE pf.statut IN ('VERSE','PARTIELLEMENT_RECUPERE')
+        """)
+        
+        dette_nette = dette_fournisseurs - avances_prefin
+        
+        f3.metric(
+            "Dette Fournisseurs (nette)",
+            f"{dette_nette:,.0f} FCFA".replace(",", " "),
+            delta=f"dont {avances_prefin:,.0f} F d'avances" if avances_prefin > 0 else None,
+            delta_color="normal"
+        )
 
         # Créances Clients – par devise
         if creances_par_devise:
@@ -4162,23 +4178,49 @@ elif choix == "🧾 Achats (Entrees)":
                             st.success(f"✅ Lot {ndl} facturé ! Reste à payer : {total_net - mt_avance:,.0f} FCFA")
                             
                             # 🆕 Détecter un préfinancement disponible pour ce fournisseur
+                            # 🆕 Détecter un préfinancement disponible — AVEC matching contrat strict
                             if id_f:
+                                # Récupérer l'ID de l'achat (fix du bug id_achat_br = None en achat direct)
+                                _id_achat_courant = (
+                                    id_achat_br 
+                                    if type_achat == "📥 Facturer un BR / Pesée en attente" 
+                                    else locals().get("id_achat")
+                                )
+                                
+                                # Déterminer le contrat de l'achat ("ACHAT-SPOT" = pas de contrat)
+                                _contrat_achat = ncc if ncc and ncc != "ACHAT-SPOT" else None
+                                
+                                # Filtrer les préfinancements : même contrat OU avance générale
                                 prefins_dispo = fetch_all("""
-                                    SELECT pf.id, pf.reference,
+                                    SELECT pf.id, pf.reference, pf.numero_contrat,
                                            pf.montant_verse - COALESCE(SUM(ip.montant_impute), 0) AS solde
                                     FROM prefinancements_fournisseurs pf
                                     LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
                                     WHERE pf.id_fournisseur = %s
                                       AND pf.statut IN ('VERSE', 'PARTIELLEMENT_RECUPERE')
+                                      AND (
+                                          -- Avance générale (utilisable partout)
+                                          pf.numero_contrat IS NULL
+                                          -- OU préfinancement du même contrat que l'achat
+                                          OR pf.numero_contrat = %s
+                                      )
                                     GROUP BY pf.id
                                     HAVING pf.montant_verse - COALESCE(SUM(ip.montant_impute), 0) > 0.01
-                                """, (id_f,))
+                                    ORDER BY 
+                                        CASE 
+                                            WHEN pf.numero_contrat = %s THEN 0  -- Priorité matching contrat
+                                            WHEN pf.numero_contrat IS NULL THEN 1  -- Puis avances générales
+                                            ELSE 2
+                                        END,
+                                        pf.date_creation ASC
+                                """, (id_f, _contrat_achat or "", _contrat_achat or ""))
                             
-                                if prefins_dispo:
+                                if prefins_dispo and _id_achat_courant:
                                     st.session_state["pre_fin_proposition"] = {
-                                        "id_achat": id_achat_br if type_achat == "📥 Facturer un BR / Pesée en attente" else None,
+                                        "id_achat": _id_achat_courant,  # ← FIX : plus de None
                                         "total_achat": total_net,
                                         "fourn_nom": nom_f,
+                                        "contrat_achat": _contrat_achat,  # ← Nouveau : on garde le contrat
                                         "prefins": prefins_dispo
                                     }
                             
@@ -4194,24 +4236,39 @@ elif choix == "🧾 Achats (Entrees)":
         if prop:
             with st.container(border=True):
                 st.markdown("### 💰 Préfinancement détecté pour ce fournisseur")
-                st.info(
-                    f"Le fournisseur **{prop['fourn_nom']}** dispose d'un préfinancement "
-                    f"en cours. Voulez-vous imputer le montant de cet achat sur l'avance ?"
-                )
-
+                
+                if prop.get('contrat_achat'):
+                    st.info(
+                        f"Le fournisseur **{prop['fourn_nom']}** dispose d'avance(s) utilisable(s) pour "
+                        f"cet achat rattaché au contrat **{prop['contrat_achat']}**. "
+                        f"Voulez-vous imputer ?"
+                    )
+                else:
+                    st.info(
+                        f"Le fournisseur **{prop['fourn_nom']}** dispose d'avance(s) utilisable(s) pour "
+                        f"cet **achat spot** (sans contrat)."
+                    )
+        
                 c_achat, c_prefin = st.columns(2)
                 with c_achat:
-                    st.metric("Montant à imputer (achat)",
-                              f"{prop['total_achat']:,.0f} FCFA")
+                    st.metric("Montant à imputer (achat)", f"{prop['total_achat']:,.0f} FCFA")
                 with c_prefin:
-                    st.metric("Préfinancements disponibles",
-                              f"{len(prop['prefins'])}")
-
-                # Choix du préfinancement
-                options_prefin = {
-                    f"{p[1]} — Solde : {float(p[2]):,.0f} FCFA": p
-                    for p in prop['prefins']
-                }
+                    st.metric("Préfinancements compatibles", f"{len(prop['prefins'])}")
+        
+                # Construire les options avec badge visuel
+                options_prefin = {}
+                for p in prop['prefins']:
+                    id_pf_p, ref_pf, contrat_pf, solde_pf = p
+                    if contrat_pf == prop.get('contrat_achat'):
+                        badge = "✅ Même contrat"
+                    elif contrat_pf is None:
+                        badge = "🌐 Avance générale"
+                    else:
+                        badge = f"📄 Contrat {contrat_pf}"
+                    
+                    lbl = f"{ref_pf} — {float(solde_pf):,.0f} FCFA ({badge})"
+                    options_prefin[lbl] = p
+                
                 choix_pf_lbl = st.selectbox(
                     "Sélectionner le préfinancement à utiliser",
                     list(options_prefin.keys()),
@@ -4219,8 +4276,9 @@ elif choix == "🧾 Achats (Entrees)":
                 )
                 pf = options_prefin[choix_pf_lbl]
                 id_pref = pf[0]
-                solde_pf = float(pf[2])
-
+                solde_pf = float(pf[3])  # ← décalé : solde est maintenant en position 3
+                contrat_pf = pf[2]
+                
                 mt_a_imputer = st.number_input(
                     "Montant à imputer *",
                     min_value=0.0,
@@ -4229,12 +4287,16 @@ elif choix == "🧾 Achats (Entrees)":
                     step=10000.0,
                     key="pre_fin_montant"
                 )
-
+        
                 col_ok, col_no = st.columns(2)
                 with col_ok:
                     if st.button("✅ Confirmer l'imputation", type="primary", use_container_width=True, key="btn_imput_conf"):
                         try:
                             ref_mvt = f"MVT-IMP-{id_pref}-{prop['id_achat']}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            comment_auto = "Imputation auto après facturation"
+                            if prop.get('contrat_achat'):
+                                comment_auto += f" (Contrat {prop['contrat_achat']})"
+                            
                             with conn.cursor() as cur:
                                 cur.execute("""
                                     INSERT INTO imputations_prefinancements
@@ -4246,10 +4308,9 @@ elif choix == "🧾 Achats (Entrees)":
                                     (id_prefinancement, type_mouvement, montant, reference_operation,
                                      id_achat, commentaire)
                                     VALUES (%s,'IMPUTATION',%s,%s,%s,%s)
-                                """, (id_pref, mt_a_imputer, ref_mvt, prop['id_achat'],
-                                      f"Imputation automatique après facturation BR"))
+                                """, (id_pref, mt_a_imputer, ref_mvt, prop['id_achat'], comment_auto))
                                 conn.commit()
-
+        
                             # Mettre à jour le statut du préfinancement
                             with conn.cursor() as cur:
                                 cur.execute("""
@@ -4274,7 +4335,7 @@ elif choix == "🧾 Achats (Entrees)":
                                         (new_st, id_pref)
                                     )
                                     conn.commit()
-
+        
                             st.success(f"✅ {mt_a_imputer:,.0f} FCFA imputés sur le préfinancement.")
                             log_action(f"Imputation auto {mt_a_imputer:,.0f} FCFA — achat #{prop['id_achat']} sur préfinancement #{id_pref}")
                             st.session_state.pop("pre_fin_proposition", None)
@@ -4283,7 +4344,7 @@ elif choix == "🧾 Achats (Entrees)":
                         except Exception as e:
                             conn.rollback()
                             st.error(f"❌ Erreur d'imputation : {e}")
-
+        
                 with col_no:
                     if st.button("⏭️ Ignorer pour cette fois", use_container_width=True, key="btn_imput_skip"):
                         st.session_state.pop("pre_fin_proposition", None)
@@ -4589,103 +4650,192 @@ elif choix == "🧾 Achats (Entrees)":
 
                                 except Exception as e:
                                     st.error(f"❌ Erreur de génération : {e}")
-    # ==========================================
-    # TAB 3 : RÈGLEMENT DES DETTES
-    # ==========================================
-    with tab3:
-        st.markdown("### 💸 Guichet de Règlement des Dettes")
-
-        achats_dettes = fetch_all("""
-            SELECT a.id, f.nom as Fournisseur, a.numero_de_lot, a.total, a.montant_avance, 
-                  (a.total - COALESCE(a.montant_avance, 0)
- - COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat = a.id), 0)) as reste_a_payer, a.numero_contrat
-            FROM achats a JOIN fournisseurs f ON a.id_fournisseur = f.id
-            WHERE (a.total - COALESCE(a.montant_avance, 0)
-       - COALESCE((SELECT SUM(montant_impute) FROM imputations_prefinancements WHERE id_achat = a.id), 0)) > 0.01 AND a.statut != 'En attente de facturation'
-            ORDER BY a.id DESC
-        """)
-
-        if not achats_dettes:
-            st.success("🎉 Excellente nouvelle ! Aucun reste à payer en attente.")
-        else:
-            dict_dettes = {f"Lot: {d[2]} | Fournisseur: {d[1]} | Reste: {d[5]:,.0f} FCFA": d for d in achats_dettes}
-
-            with st.form("form_reglement_dette", clear_on_submit=True):
-                dette_selectionnee = st.selectbox("Sélectionner la dette à solder *", list(dict_dettes.keys()))
-                infos_dette = dict_dettes[dette_selectionnee]
-                id_achat, fourn_nom, lot_concerne = infos_dette[0], infos_dette[1], infos_dette[2]
-                total_net_dette, avance_actuelle, reste_a_payer_actuel = infos_dette[3], infos_dette[4], infos_dette[5]
-                total_net_dette        = float(total_net_dette or 0.0)
-                avance_actuelle        = float(avance_actuelle or 0.0)
-                reste_a_payer_actuel   = float(reste_a_payer_actuel or 0.0)
-
-                st.markdown("---")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Total Facturé", f"{total_net_dette:,.0f} F")
-                m2.metric("Déjà Payé", f"{avance_actuelle:,.0f} F")
-                m3.metric("Reste à Payer", f"{reste_a_payer_actuel:,.0f} F", delta="- Dette", delta_color="inverse")
-                st.markdown("---")
-
-                c_pay1, c_pay2 = st.columns(2)
-                montant_regle = c_pay1.number_input(
-                    "Nouveau montant à verser (FCFA) *",
-                    min_value=0.0,
-                    max_value=float(reste_a_payer_actuel),
-                    step=5000.0
-                )
-                date_reglement = c_pay2.date_input("Date d'opération", value=date.today())
-
-                id_f_dette = fetch_one("SELECT id_fournisseur FROM achats WHERE id = %s", (id_achat,))[0]
-                compte_f_principal = fetch_one("SELECT numero_de_compte FROM fournisseurs WHERE id = %s", (id_f_dette,))[0]
-                comptes_f_annexes = fetch_all(
-                    "SELECT type_compte, nom_institution, numero_compte, titulaire FROM comptes_fournisseurs WHERE id_fournisseur = %s",
-                    (id_f_dette,)
-                )
-
-                options_regl = [f"[Principal] {compte_f_principal}"] if compte_f_principal and compte_f_principal != "N/A" else []
-                options_regl.extend([f"[{ca[0]}] {ca[1]} - {ca[2]} ({ca[3]})" for ca in comptes_f_annexes])
-                options_regl.extend(["[Espèces] Paiement Cash"])
-
-                mode_regl_dette = st.selectbox("Mode de Paiement :", options_regl)
-
-                st.markdown("<br>", unsafe_allow_html=True)
-                submit_reglement = st.form_submit_button("✅ Valider le paiement", type="primary", use_container_width=True)
-
-                if submit_reglement:
-                    if montant_regle <= 0:
-                        st.error("❌ Le montant du règlement doit être supérieur à 0.")
-                    elif montant_regle > reste_a_payer_actuel:
-                        st.error(f"❌ Le montant saisi ({montant_regle:,.0f} FCFA) dépasse le reste à payer ({reste_a_payer_actuel:,.0f} FCFA).")
-                    else:
-                        # ✅ Un seul calcul, tout en float
-                        nouvelle_avance = avance_actuelle + float(montant_regle)
-                        nouveau_reste   = total_net_dette - nouvelle_avance
-                        nouveau_statut  = "Paye" if nouveau_reste <= 0.1 else "Avance"
-                
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "UPDATE achats SET montant_avance = %s, statut = %s WHERE id = %s",
-                                (nouvelle_avance, nouveau_statut, id_achat)
+        # ==========================================
+        # TAB 3 : RÈGLEMENT DES DETTES
+        # ==========================================
+        with tab3:
+            st.markdown("### 💸 Guichet de Règlement des Dettes")
+    
+            achats_dettes = fetch_all("""
+                SELECT 
+                    a.id, 
+                    f.nom AS fournisseur, 
+                    a.numero_de_lot, 
+                    a.total, 
+                    COALESCE(a.montant_avance, 0) AS montant_avance,
+                    (a.total 
+                     - COALESCE(a.montant_avance, 0)
+                     - COALESCE((SELECT SUM(montant_impute) 
+                                 FROM imputations_prefinancements 
+                                 WHERE id_achat = a.id), 0)
+                    ) AS reste_a_payer, 
+                    a.numero_contrat
+                FROM achats a 
+                JOIN fournisseurs f ON a.id_fournisseur = f.id
+                WHERE (a.total 
+                       - COALESCE(a.montant_avance, 0)
+                       - COALESCE((SELECT SUM(montant_impute) 
+                                   FROM imputations_prefinancements 
+                                   WHERE id_achat = a.id), 0)
+                      ) > 0.01 
+                  AND a.statut != 'En attente de facturation'
+                ORDER BY a.id DESC
+            """)
+    
+            if not achats_dettes:
+                st.success("🎉 Excellente nouvelle ! Aucun reste à payer en attente.")
+            else:
+                dict_dettes = {
+                    f"Lot: {d[2]} | {d[1]} | Reste: {d[5]:,.0f} FCFA": d 
+                    for d in achats_dettes
+                }
+    
+                with st.form("form_reglement_dette", clear_on_submit=True):
+                    dette_selectionnee = st.selectbox(
+                        "Sélectionner la dette à solder *", 
+                        list(dict_dettes.keys())
+                    )
+                    infos_dette = dict_dettes[dette_selectionnee]
+    
+                    id_achat              = infos_dette[0]
+                    fourn_nom             = infos_dette[1]
+                    lot_concerne          = infos_dette[2]
+                    total_net_dette       = float(infos_dette[3] or 0.0)
+                    avance_actuelle       = float(infos_dette[4] or 0.0)
+                    reste_a_payer_actuel  = float(infos_dette[5] or 0.0)
+    
+                    # ---------------------------------------------------------
+                    # Récupérer les imputations préfinancement AVANT l'affichage
+                    # (pour afficher une situation comptable cohérente)
+                    # ---------------------------------------------------------
+                    imputations_pref = fetch_one("""
+                        SELECT COALESCE(SUM(montant_impute), 0)
+                        FROM imputations_prefinancements
+                        WHERE id_achat = %s
+                    """, (id_achat,))
+                    total_impute_pref = float(imputations_pref[0] or 0) if imputations_pref else 0.0
+                    deja_couvert = avance_actuelle + total_impute_pref
+    
+                    st.markdown("---")
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Total Facturé", f"{total_net_dette:,.0f} F")
+                    m2.metric(
+                        "Déjà couvert",
+                        f"{deja_couvert:,.0f} F",
+                        delta=(
+                            f"dont {total_impute_pref:,.0f} F d'avances"
+                            if total_impute_pref > 0 else None
+                        ),
+                        delta_color="off"
+                    )
+                    m3.metric(
+                        "Reste à Payer",
+                        f"{reste_a_payer_actuel:,.0f} F",
+                        delta="- Dette",
+                        delta_color="inverse"
+                    )
+                    st.markdown("---")
+    
+                    c_pay1, c_pay2 = st.columns(2)
+                    montant_regle = c_pay1.number_input(
+                        "Nouveau montant à verser (FCFA) *",
+                        min_value=0.0,
+                        max_value=float(reste_a_payer_actuel),
+                        step=5000.0
+                    )
+                    date_reglement = c_pay2.date_input("Date d'opération", value=date.today())
+    
+                    # ---------------------------------------------------------
+                    # Comptes de paiement du fournisseur
+                    # ---------------------------------------------------------
+                    id_f_dette = fetch_one(
+                        "SELECT id_fournisseur FROM achats WHERE id = %s", 
+                        (id_achat,)
+                    )[0]
+                    compte_f_principal = fetch_one(
+                        "SELECT numero_de_compte FROM fournisseurs WHERE id = %s", 
+                        (id_f_dette,)
+                    )[0]
+                    comptes_f_annexes = fetch_all(
+                        """
+                        SELECT type_compte, nom_institution, numero_compte, titulaire 
+                        FROM comptes_fournisseurs 
+                        WHERE id_fournisseur = %s
+                        """,
+                        (id_f_dette,)
+                    )
+    
+                    options_regl = (
+                        [f"[Principal] {compte_f_principal}"] 
+                        if compte_f_principal and compte_f_principal != "N/A" 
+                        else []
+                    )
+                    options_regl.extend([
+                        f"[{ca[0]}] {ca[1]} - {ca[2]} ({ca[3]})" 
+                        for ca in comptes_f_annexes
+                    ])
+                    options_regl.extend(["[Espèces] Paiement Cash"])
+    
+                    mode_regl_dette = st.selectbox("Mode de Paiement :", options_regl)
+    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    submit_reglement = st.form_submit_button(
+                        "✅ Valider le paiement", 
+                        type="primary", 
+                        use_container_width=True
+                    )
+    
+                    # ---------------------------------------------------------
+                    # TRAITEMENT
+                    # ---------------------------------------------------------
+                    if submit_reglement:
+                        if montant_regle <= 0:
+                            st.error("❌ Le montant du règlement doit être supérieur à 0.")
+                        elif montant_regle > reste_a_payer_actuel:
+                            st.error(
+                                f"❌ Le montant saisi ({montant_regle:,.0f} FCFA) "
+                                f"dépasse le reste à payer ({reste_a_payer_actuel:,.0f} FCFA)."
                             )
-                            # ... reste inchangé
-
-                            ref_reglement = f"REG-{id_achat}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                            cur.execute("""
-                                INSERT INTO documents_generes (type_doc, reference, montant, demandeur, description, statut)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                            """, (
-                                'reglement_dette',
-                                ref_reglement,
-                                montant_regle,
-                                st.session_state.get('username', 'Agent'),
-                                f"Règlement partiel/solde du lot {lot_concerne} (Fournisseur: {fourn_nom}) - Montant: {montant_regle:,.0f} FCFA",
-                                'EN_ATTENTE'
-                            ))
-                            conn.commit()
-
-                        log_action(f"Dette réglée de {montant_regle:,.0f} FCFA pour l'achat N°{id_achat} (Lot {lot_concerne}) - Document {ref_reglement} créé")
-                        st.success(f"✅ Paiement de {montant_regle:,.0f} FCFA enregistré ! Reste dû : {nouveau_reste:,.0f} FCFA. Le document de règlement (réf. {ref_reglement}) a été soumis à la Direction pour validation.")
-                        st.rerun()                  
+                        else:
+                            # Calcul du nouveau reste : total − nouveau montant_avance − imputations préfinancement
+                            nouvelle_avance = avance_actuelle + float(montant_regle)
+                            nouveau_reste   = total_net_dette - nouvelle_avance - total_impute_pref
+                            nouveau_statut  = "Paye" if nouveau_reste <= 0.1 else "Avance"
+    
+                            with conn.cursor() as cur:
+                                # 1. Mise à jour de l'achat
+                                cur.execute(
+                                    "UPDATE achats SET montant_avance = %s, statut = %s WHERE id = %s",
+                                    (nouvelle_avance, nouveau_statut, id_achat)
+                                )
+    
+                                # 2. Créer le document de règlement à valider par la Direction
+                                ref_reglement = f"REG-{id_achat}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                cur.execute("""
+                                    INSERT INTO documents_generes 
+                                        (type_doc, reference, montant, demandeur, description, statut)
+                                    VALUES (%s, %s, %s, %s, %s, %s)
+                                """, (
+                                    'reglement_dette',
+                                    ref_reglement,
+                                    montant_regle,
+                                    st.session_state.get('username', 'Agent'),
+                                    f"Règlement du lot {lot_concerne} ({fourn_nom}) — "
+                                    f"{montant_regle:,.0f} FCFA | Mode: {mode_regl_dette} | Date: {date_reglement}",
+                                    'EN_ATTENTE'
+                                ))
+                                conn.commit()
+    
+                            log_action(
+                                f"Dette réglée de {montant_regle:,.0f} FCFA pour l'achat N°{id_achat} "
+                                f"(Lot {lot_concerne}) — Document {ref_reglement}"
+                            )
+                            st.success(
+                                f"✅ Paiement de {montant_regle:,.0f} FCFA enregistré ! "
+                                f"Reste dû : {nouveau_reste:,.0f} FCFA. "
+                                f"Le document (réf. {ref_reglement}) a été soumis à la Direction pour validation."
+                            )
+                            st.rerun()                 
 elif choix == "🛍️ Ventes (Sorties)":
     # =================================================================
     # STYLES MODERNES
@@ -6066,11 +6216,12 @@ elif choix == "💰 Préfinancement Fournisseurs":
     ])
 
     # ================================================================
+    # ================================================================
     # TAB 1 : NOUVEAU PRÉFINANCEMENT
     # ================================================================
     with tab1:
         st.markdown("### ➕ Créer un dossier de préfinancement")
-        st.caption("Créer la demande. Le versement effectif se fera après validation Direction.")
+        st.caption("Créer la demande. Le versement effectif se fait à la création.")
 
         fournisseurs_dispo = fetch_all("SELECT id, nom FROM fournisseurs ORDER BY nom")
 
@@ -6080,13 +6231,38 @@ elif choix == "💰 Préfinancement Fournisseurs":
             dict_f = {f[1]: f[0] for f in fournisseurs_dispo}
             ref_auto = _gen_reference_prefin()
 
+            # ----- SÉLECTEUR FOURNISSEUR (hors form pour filtrer les contrats) -----
+            f_nom = st.selectbox(
+                "🏢 Fournisseur *", 
+                list(dict_f.keys()), 
+                key="pref_fournisseur"
+            )
+
+            # Charger les contrats actifs DE CE FOURNISSEUR
+            contrats_dispo = fetch_all("""
+                SELECT numero_contrat, quantite_prevue, prix_unitaire
+                FROM contrats 
+                WHERE id_fournisseur = %s AND statut IN ('Actif', 'VALIDE')
+                ORDER BY numero_contrat DESC
+            """, (dict_f[f_nom],))
+
+            options_contrats = ["— Avance générale (sans contrat spécifique) —"]
+            for c in contrats_dispo:
+                options_contrats.append(
+                    f"{c[0]} — {c[1]:,.0f} kg @ {c[2]:,.0f} F/kg"
+                )
+
             with st.form("form_prefinancement", clear_on_submit=True):
                 c1, c2 = st.columns(2)
                 with c1:
-                    f_nom = st.selectbox("🏢 Fournisseur *", list(dict_f.keys()))
                     montant_accorde = st.number_input(
                         "💵 Montant accordé (FCFA) *",
                         min_value=1000.0, step=50000.0, value=1000000.0
+                    )
+                    contrat_choisi = st.selectbox(
+                        "📄 Contrat lié (optionnel)", 
+                        options_contrats,
+                        help="Rattacher l'avance à un contrat permet de tracer la récupération par contrat."
                     )
                 with c2:
                     st.text_input("🔖 Référence (auto)", value=ref_auto, disabled=True)
@@ -6097,29 +6273,33 @@ elif choix == "💰 Préfinancement Fournisseurs":
                     )
 
                 if st.form_submit_button("💾 Créer le dossier", type="primary", use_container_width=True):
-                   # Dans TAB 1, remplacer tout le bloc INSERT par :
-
                     if montant_accorde <= 0:
                         st.error("❌ Montant invalide.")
                     else:
+                        # Extraire le numéro de contrat (ou None si "général")
+                        if contrat_choisi == options_contrats[0]:
+                            numero_contrat_final = None
+                        else:
+                            numero_contrat_final = contrat_choisi.split(" — ")[0].strip()
+
                         try:
                             with conn.cursor() as cur:
-                                # On crée directement le dossier avec le versement
                                 cur.execute("""
                                     INSERT INTO prefinancements_fournisseurs
                                     (reference, id_fournisseur, montant_accorde, montant_verse, 
-                                     statut, observations, cree_par, valide_par, date_validation)
-                                    VALUES (%s,%s,%s,%s,'VERSE',%s,%s,%s,NOW())
+                                     statut, observations, cree_par, valide_par, date_validation,
+                                     numero_contrat)
+                                    VALUES (%s,%s,%s,%s,'VERSE',%s,%s,%s,NOW(),%s)
                                     RETURNING id
                                 """, (
                                     ref_auto, dict_f[f_nom], montant_accorde, montant_accorde,
                                     conditions.strip() if conditions else None,
                                     st.session_state.get('username', 'Agent'),
-                                    st.session_state.get('username', 'Agent')
+                                    st.session_state.get('username', 'Agent'),
+                                    numero_contrat_final
                                 ))
                                 id_pref = cur.fetchone()[0]
-                                
-                                # Enregistrer le mouvement de versement dans le journal
+
                                 ref_mvt = f"MVT-VER-{id_pref}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                 cur.execute("""
                                     INSERT INTO mouvements_prefinancements
@@ -6128,12 +6308,14 @@ elif choix == "💰 Préfinancement Fournisseurs":
                                     VALUES (%s,'VERSEMENT',%s,%s,%s,%s)
                                 """, (
                                     id_pref, montant_accorde, ref_mvt,
-                                    "Versement initial à la création du dossier",
+                                    f"Versement initial" + (f" (Contrat {numero_contrat_final})" if numero_contrat_final else ""),
                                     st.session_state.get('username', 'Agent')
                                 ))
                                 conn.commit()
-                            log_action(f"Création préfinancement {ref_auto} ({montant_accorde:,.0f} FCFA)")
-                            st.success(f"✅ Dossier **{ref_auto}** créé et versé ({montant_accorde:,.0f} FCFA).")
+
+                            suffixe = f" · Contrat {numero_contrat_final}" if numero_contrat_final else " · Avance générale"
+                            log_action(f"Création préfinancement {ref_auto} ({montant_accorde:,.0f} FCFA){suffixe}")
+                            st.success(f"✅ Dossier **{ref_auto}** créé et versé ({montant_accorde:,.0f} FCFA){suffixe}.")
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
@@ -6361,6 +6543,7 @@ elif choix == "💰 Préfinancement Fournisseurs":
                             st.error("❌ Dossier annulé.")
 
     # ================================================================
+    # ================================================================
     # TAB 3 : IMPUTATION SUR ACHATS
     # ================================================================
     with tab3:
@@ -6382,9 +6565,11 @@ elif choix == "💰 Préfinancement Fournisseurs":
             fourn_choisi = st.selectbox("🏢 Fournisseur", list(dict_f_prefin.keys()), key="imput_f")
             id_f_imput = dict_f_prefin[fourn_choisi]
 
+            # ---- Préfinancements AVEC numéro de contrat ----
             prefins_ouverts = fetch_all("""
                 SELECT pf.id, pf.reference, pf.montant_verse,
-                       COALESCE(SUM(ip.montant_impute), 0) AS impute
+                       COALESCE(SUM(ip.montant_impute), 0) AS impute,
+                       pf.numero_contrat
                 FROM prefinancements_fournisseurs pf
                 LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
                 WHERE pf.id_fournisseur=%s AND pf.statut IN ('VERSE','PARTIELLEMENT_RECUPERE')
@@ -6393,6 +6578,7 @@ elif choix == "💰 Préfinancement Fournisseurs":
                 ORDER BY pf.date_creation ASC
             """, (id_f_imput,))
 
+            # ---- Achats AVEC numéro de contrat ----
             achats_ouverts = fetch_all("""
                 SELECT a.id, a.numero_de_lot, a.numero_contrat, a.date,
                        a.total, COALESCE(a.montant_avance,0) AS avance,
@@ -6415,13 +6601,19 @@ elif choix == "💰 Préfinancement Fournisseurs":
                 else:
                     for pf in prefins_ouverts:
                         s = float(pf[2]) - float(pf[3])
+                        contrat_label = f"📄 Contrat : <b>{pf[4]}</b>" if pf[4] else "— Avance générale"
                         lbl = f"{pf[1]} — {s:,.0f} F"
-                        dict_prefins[lbl] = {'id': pf[0], 'solde': s}
+                        dict_prefins[lbl] = {
+                            'id': pf[0],
+                            'solde': s,
+                            'contrat': pf[4]  # None si général
+                        }
                         st.markdown(f"""
                             <div style="background:#F0FDF4;border-left:4px solid #16A34A;
                                         padding:10px 14px;border-radius:8px;margin-bottom:8px;">
                                 <div style="font-weight:700;color:#065F46;font-size:13px;">{pf[1]}</div>
                                 <div style="color:#16A34A;font-size:12px;">Solde : <b>{s:,.0f} FCFA</b></div>
+                                <div style="color:#059669;font-size:11px;margin-top:3px;">{contrat_label}</div>
                             </div>
                         """, unsafe_allow_html=True)
 
@@ -6432,34 +6624,111 @@ elif choix == "💰 Préfinancement Fournisseurs":
                 else:
                     for ac in achats_ouverts:
                         reste = float(ac[4]) - float(ac[5]) - float(ac[6])
+                        contrat_label = f"📄 Contrat : <b>{ac[2]}</b>" if ac[2] else "— Achat spot (sans contrat)"
                         lbl = f"Lot {ac[1]} — {reste:,.0f} F"
-                        dict_achats[lbl] = {'id': ac[0], 'reste': reste}
+                        dict_achats[lbl] = {
+                            'id': ac[0],
+                            'reste': reste,
+                            'contrat': ac[2]
+                        }
                         st.markdown(f"""
                             <div style="background:#FEF3C7;border-left:4px solid #F59E0B;
                                         padding:10px 14px;border-radius:8px;margin-bottom:8px;">
                                 <div style="font-weight:700;color:#78350F;font-size:13px;">Lot {ac[1]}</div>
                                 <div style="color:#B45309;font-size:11px;">Total : {float(ac[4]):,.0f} F | Avance post-BR : {float(ac[5]):,.0f} F</div>
                                 <div style="color:#92400E;font-size:12px;font-weight:700;">Reste : {reste:,.0f} FCFA</div>
+                                <div style="color:#A16207;font-size:11px;margin-top:3px;">{contrat_label}</div>
                             </div>
                         """, unsafe_allow_html=True)
 
             if dict_prefins and dict_achats:
                 st.divider()
                 st.markdown("#### 🎯 Réaliser une imputation")
-                with st.form("form_imputation", clear_on_submit=True):
-                    i1, i2 = st.columns(2)
-                    with i1:
-                        pl = st.selectbox("💰 Préfinancement", list(dict_prefins.keys()))
-                        id_p = dict_prefins[pl]['id']; sol_p = dict_prefins[pl]['solde']
-                    with i2:
-                        al = st.selectbox("🧾 Achat", list(dict_achats.keys()))
-                        id_a = dict_achats[al]['id']; sol_a = dict_achats[al]['reste']
 
+                # ---- ÉTAPE 1 : l'utilisateur choisit d'abord l'ACHAT ----
+                st.markdown("**1️⃣ Sélectionnez l'achat à régler**")
+                al = st.selectbox(
+                    "🧾 Achat", 
+                    list(dict_achats.keys()), 
+                    key="sel_achat_imput"
+                )
+                id_a = dict_achats[al]['id']
+                sol_a = dict_achats[al]['reste']
+                contrat_a = dict_achats[al]['contrat']
+
+                # ---- ÉTAPE 2 : préfinancements triés par pertinence ----
+                st.markdown("**2️⃣ Sélectionnez le préfinancement à utiliser**")
+                matching_pfs = [
+                    k for k, v in dict_prefins.items()
+                    if contrat_a and v['contrat'] == contrat_a
+                ]
+                others_pfs = [k for k in dict_prefins.keys() if k not in matching_pfs]
+                ordered_pfs = matching_pfs + others_pfs
+
+                pl = st.selectbox(
+                    "💰 Préfinancement", 
+                    ordered_pfs, 
+                    key="sel_pref_imput",
+                    help="Les préfinancements du même contrat sont affichés en priorité."
+                )
+                id_p = dict_prefins[pl]['id']
+                sol_p = dict_prefins[pl]['solde']
+                contrat_p = dict_prefins[pl]['contrat']
+
+                # ---- Contrôle de cohérence contrat ----
+                if contrat_a and contrat_p and contrat_a != contrat_p:
+                    st.warning(
+                        f"⚠️ **Incohérence de contrat détectée**\n\n"
+                        f"- L'achat est lié au contrat **{contrat_a}**\n"
+                        f"- Le préfinancement est lié au contrat **{contrat_p}**\n\n"
+                        f"Vous pouvez continuer si c'est intentionnel, mais vérifiez bien votre comptabilité analytique."
+                    )
+                elif contrat_a and contrat_p and contrat_a == contrat_p:
+                    st.success(f"✅ Cohérent : achat et préfinancement tous deux liés au contrat **{contrat_a}**.")
+                elif contrat_p is None:
+                    st.info("ℹ️ Ce préfinancement est une **avance générale** (non rattachée à un contrat), utilisable pour n'importe quel achat.")
+                elif contrat_a is None:
+                    st.info("ℹ️ Cet achat est un **achat spot** (non rattaché à un contrat), utilisable avec n'importe quelle avance.")
+
+                # ---- FORM avec montant + aperçu ----
+                with st.form("form_imputation", clear_on_submit=True):
                     mt_max = min(sol_p, sol_a)
-                    st.info(f"💡 Maximum imputable : **{mt_max:,.0f} FCFA**")
-                    mt = st.number_input("Montant à imputer *", min_value=0.0,
-                                         max_value=float(mt_max), value=float(mt_max), step=10000.0)
+                    mt = st.number_input(
+                        "💵 Montant à imputer *", 
+                        min_value=0.0,
+                        max_value=float(mt_max), 
+                        value=float(mt_max), 
+                        step=10000.0
+                    )
                     comm = st.text_input("Commentaire (optionnel)")
+
+                    st.markdown("#### 📊 Situation après imputation")
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.metric(
+                            "💰 Solde préfinancement",
+                            f"{sol_p:,.0f} F",
+                            delta=f"-{mt:,.0f} F" if mt > 0 else None,
+                            delta_color="inverse"
+                        )
+                    with c2:
+                        st.metric(
+                            "🧾 Reste achat après imputation",
+                            f"{max(0, sol_a - mt):,.0f} F"
+                        )
+                    with c3:
+                        reste_deviendra_dette = max(0, sol_a - mt)
+                        st.metric(
+                            "⚠️ Deviendra dette normale",
+                            f"{reste_deviendra_dette:,.0f} F",
+                            help="Ce montant sera à régler via le circuit standard (Tab Règlement des Dettes)"
+                        )
+
+                    if mt < sol_a:
+                        st.info(
+                            f"💡 **{sol_a - mt:,.0f} FCFA** resteront dus au fournisseur et basculeront "
+                            f"automatiquement dans **🧾 Achats → 💸 Règlement des Dettes**."
+                        )
 
                     if st.form_submit_button("🔗 Valider l'imputation", type="primary", use_container_width=True):
                         if mt <= 0:
@@ -6488,8 +6757,7 @@ elif choix == "💰 Préfinancement Fournisseurs":
                                              id_achat, commentaire)
                                             VALUES (%s,'IMPUTATION',%s,%s,%s,%s)
                                         """, (id_p, mt, ref_mvt, id_a,
-                                              comm or f"Imputation sur achat #{id_a}"
-                                            ))
+                                              comm or f"Imputation sur achat #{id_a}"))
                                         conn.commit()
                                     new_s = _update_statut_prefin(id_p)
                                     log_action(f"Imputation {id_p}→{id_a} : {mt:,.0f} FCFA")
