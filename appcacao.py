@@ -3529,12 +3529,15 @@ if choix == "🏠 Tableau de Bord":
             WHERE pf.statut IN ('VERSE','PARTIELLEMENT_RECUPERE')
         """)
         
-        dette_nette = dette_fournisseurs - avances_prefin
+        dette_nette = float(dette_fournisseurs) - float(avances_prefin)
+        
+        avances_prefin_f = float(avances_prefin)
+        dette_nette = float(dette_fournisseurs) - avances_prefin_f
         
         f3.metric(
             "Dette Fournisseurs (nette)",
             f"{dette_nette:,.0f} FCFA".replace(",", " "),
-            delta=f"dont {avances_prefin:,.0f} F d'avances" if avances_prefin > 0 else None,
+            delta=f"dont {avances_prefin_f:,.0f} F d'avances" if avances_prefin_f > 0 else None,
             delta_color="normal"
         )
 
