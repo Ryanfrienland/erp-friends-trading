@@ -10202,7 +10202,32 @@ elif choix == "🏪 Magasins":
                                         "plafond_pourcentage": deductions.get('plafond_pourcentage', 0.0),
                                     })
 
-
+                                    # 🔧 Alias pour compatibilité avec generer_bulletin_analyse_cacao_pdf
+                                    data_analyse.update({
+                                        "moisies_c1":   valeurs_c['moisies_c1'],
+                                        "moisies_c2":   valeurs_c['moisies_c2'],
+                                        "moisies_c3":   valeurs_c['moisies_c3'],
+                                        "ardoisees_c1": valeurs_c['ardoisees_c1'],
+                                        "ardoisees_c2": valeurs_c['ardoisees_c2'],
+                                        "ardoisees_c3": valeurs_c['ardoisees_c3'],
+                                        "mitees_c1":    valeurs_c['mitees_c1'],
+                                        "mitees_c2":    valeurs_c['mitees_c2'],
+                                        "mitees_c3":    valeurs_c['mitees_c3'],
+                                        "germees_c1":   valeurs_c['germees_c1'],
+                                        "germees_c2":   valeurs_c['germees_c2'],
+                                        "germees_c3":   valeurs_c['germees_c3'],
+                                        "violettes_c1": valeurs_c['violettes_c1'],
+                                        "violettes_c2": valeurs_c['violettes_c2'],
+                                        "violettes_c3": valeurs_c['violettes_c3'],
+                                        # white_spots déjà aligné
+                                    
+                                        # Moyennes (au cas où le PDF utilise ce format)
+                                        "moisies_pct":   pct_moisies,
+                                        "ardoisees_pct": pct_ardoisees,
+                                        "mitees_pct":    pct_mitees,
+                                        "germees_pct":   pct_germees,
+                                        "violettes_pct": pct_violettes,
+                                    })
                                     resultat_pdf = generer_bulletin_analyse_cacao_pdf(data_analyse, nom_fichier)
                                     if isinstance(resultat_pdf, tuple):
                                         pdf_path, pdf_bytes = resultat_pdf
