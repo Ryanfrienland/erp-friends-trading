@@ -8120,7 +8120,23 @@ elif choix == "📝 Contrats":
             df_base['Statut'] = [r[0] for r in resultats]
             df_base['Suivi Temps'] = [r[1] for r in resultats]
             df_base['Taux Remplissage'] = [r[2] for r in resultats]
-            df_base['Reste à Livrer (kg)'] = (df_base['Qte Prévue (kg)'] - df_base['Qte Livrée (kg)']).clip(lower=0)
+            
+            # 🔧 Normalisation : psycopg2 renvoie Decimal → colonnes object → soustraction cassée
+            df_base['Qte Prévue (kg)'] = pd.to_numeric(
+                df_base['Qte Prévue (kg)'], errors='coerce'
+            ).fillna(0.0).astype(float)
+            
+            df_base['Qte Livrée (kg)'] = pd.to_numeric(
+                df_base['Qte Livrée (kg)'], errors='coerce'
+            ).fillna(0.0).astype(float)
+            
+            df_base['Taux Remplissage'] = pd.to_numeric(
+                df_base['Taux Remplissage'], errors='coerce'
+            ).fillna(0.0).astype(float)
+            
+            df_base['Reste à Livrer (kg)'] = (
+                df_base['Qte Prévue (kg)'] - df_base['Qte Livrée (kg)']
+            ).clip(lower=0)
 
             with st.container(border=True):
                 k1, k2, k3, k4 = st.columns(4)
