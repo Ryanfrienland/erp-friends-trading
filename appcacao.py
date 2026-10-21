@@ -2039,9 +2039,9 @@ def collecter_alertes_contrats() -> list:
             c.quantite_prevue, c.prix_unitaire,
             c.statut, c.provenance,
             COALESCE((
-                SELECT SUM(quantite_kg) FROM achats
-                WHERE numero_contrat = c.numero_contrat
-            ), 0) AS qte_livree
+    SELECT SUM(COALESCE(poids_net, 0)) FROM achats
+    WHERE numero_contrat = c.numero_contrat
+), 0) AS qte_livree
         FROM contrats c
         JOIN fournisseurs f ON c.id_fournisseur = f.id
         WHERE c.statut IN ('Actif', 'VALIDE')
@@ -8059,10 +8059,9 @@ elif choix == "📝 Contrats":
                 c.delai_livraison AS "Délai Livraison", c.provenance AS "Provenance",
                 c.termes_de_paiement AS "Termes de Paiement", c.statut AS "Statut BDD",
                 COALESCE((
-    SELECT SUM(COALESCE(poids_net_paye, quantite_kg)) 
+    SELECT SUM(COALESCE(poids_net, 0)) 
     FROM achats 
     WHERE numero_contrat = c.numero_contrat
-    AND statut != 'En attente de facturation'
 ), 0) AS "Qte Livrée (kg)"
             FROM contrats c
             JOIN fournisseurs f ON c.id_fournisseur = f.id
