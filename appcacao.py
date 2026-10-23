@@ -11167,70 +11167,70 @@ elif choix == "👑 Espace Direction":
                                         res = generer_bon_paiement_pdf(data_p, type_document=doc_type)
                                         pdf_bytes = res[1] if isinstance(res, tuple) else res
 
-                                                    elif doc_type == 'contrat_transport':
-                            row_c = fetch_one("""
-                                SELECT ct.numero_contrat, ct.date_signature, ct.lieu_signature,
-                                       ct.termes_paiement, ct.signataire,
-                                       p.nom, p.telephone, p.nui
-                                FROM contrats_transport ct
-                                LEFT JOIN prestataires p ON ct.id_prestataire = p.id
-                                WHERE ct.numero_contrat = %s
-                            """, (doc_ref,))
-                            
-                            if row_c:
-                                rows_lignes = fetch_all("""
-                                    SELECT marchandise, lieu_prise_en_charge, colis_poids_net,
-                                           prix_par_tonne, destinataire, lieu_livraison, valeur_declaree
-                                    FROM contrats_transport_lignes ctl
-                                    JOIN contrats_transport ct ON ctl.id_contrat = ct.id
+                            elif doc_type == 'contrat_transport':
+                                row_c = fetch_one("""
+                                    SELECT ct.numero_contrat, ct.date_signature, ct.lieu_signature,
+                                           ct.termes_paiement, ct.signataire,
+                                           p.nom, p.telephone, p.nui
+                                    FROM contrats_transport ct
+                                    LEFT JOIN prestataires p ON ct.id_prestataire = p.id
                                     WHERE ct.numero_contrat = %s
-                                    ORDER BY ctl.id
                                 """, (doc_ref,))
                                 
-                                lignes_pdf = [
-                                    {
-                                        "marchandise": rl[0], "lieu_prise_en_charge": rl[1],
-                                        "colis_poids_net": rl[2],
-                                        "prix_par_tonne": float(rl[3] or 0),
-                                        "destinataire": rl[4], "lieu_livraison": rl[5],
-                                        "valeur_declaree": rl[6],
-                                    } for rl in rows_lignes
-                                ]
-                                
-                                date_sig = row_c[1].strftime('%d/%m/%Y') if hasattr(row_c[1], 'strftime') else str(row_c[1] or '')
-                                data_pdf = {
-                                    "num": row_c[0],
-                                    "date_signature": date_sig,
-                                    "lieu_signature": row_c[2] or "Douala",
-                                    "termes_paiement": row_c[3] or "",
-                                    "transporteur_nom": row_c[5] or "N/A",
-                                    "transporteur_cni": "N/A",
-                                    "transporteur_nui": row_c[7] or "N/A",
-                                    "transporteur_telephone": row_c[6] or "N/A",
-                                }
-
-                                # 🔧 LA CORRECTION EST ICI : On récupère le cachet AVANT de générer
-                                cachet_a_utiliser = None
-                                if role_signataire:
-                                    res_cachet = fetch_one(
-                                        "SELECT fichier_cachet FROM cachets_direction WHERE role_signataire = %s",
-                                        (role_signataire,)
+                                if row_c:
+                                    rows_lignes = fetch_all("""
+                                        SELECT marchandise, lieu_prise_en_charge, colis_poids_net,
+                                               prix_par_tonne, destinataire, lieu_livraison, valeur_declaree
+                                        FROM contrats_transport_lignes ctl
+                                        JOIN contrats_transport ct ON ctl.id_contrat = ct.id
+                                        WHERE ct.numero_contrat = %s
+                                        ORDER BY ctl.id
+                                    """, (doc_ref,))
+                                    
+                                    lignes_pdf = [
+                                        {
+                                            "marchandise": rl[0], "lieu_prise_en_charge": rl[1],
+                                            "colis_poids_net": rl[2],
+                                            "prix_par_tonne": float(rl[3] or 0),
+                                            "destinataire": rl[4], "lieu_livraison": rl[5],
+                                            "valeur_declaree": rl[6],
+                                        } for rl in rows_lignes
+                                    ]
+                                    
+                                    date_sig = row_c[1].strftime('%d/%m/%Y') if hasattr(row_c[1], 'strftime') else str(row_c[1] or '')
+                                    data_pdf = {
+                                        "num": row_c[0],
+                                        "date_signature": date_sig,
+                                        "lieu_signature": row_c[2] or "Douala",
+                                        "termes_paiement": row_c[3] or "",
+                                        "transporteur_nom": row_c[5] or "N/A",
+                                        "transporteur_cni": "N/A",
+                                        "transporteur_nui": row_c[7] or "N/A",
+                                        "transporteur_telephone": row_c[6] or "N/A",
+                                    }
+    
+                                    # 🔧 LA CORRECTION EST ICI : On récupère le cachet AVANT de générer
+                                    cachet_a_utiliser = None
+                                    if role_signataire:
+                                        res_cachet = fetch_one(
+                                            "SELECT fichier_cachet FROM cachets_direction WHERE role_signataire = %s",
+                                            (role_signataire,)
+                                        )
+                                        if res_cachet:
+                                            cachet_a_utiliser = res_cachet[0]
+    
+                                    pdf_bytes = generer_contrat_transport_pdf(
+                                        data_pdf, lignes_pdf, cachet_blob=cachet_a_utiliser
                                     )
-                                    if res_cachet:
-                                        cachet_a_utiliser = res_cachet[0]
-
-                                pdf_bytes = generer_contrat_transport_pdf(
-                                    data_pdf, lignes_pdf, cachet_blob=cachet_a_utiliser
-                                )
-                                
-                                # Mise à jour statut
-                                with conn.cursor() as cur:
-                                    cur.execute(
-                                        "UPDATE contrats_transport SET statut='VALIDE', signataire=%s "
-                                        "WHERE numero_contrat=%s",
-                                        (role_signataire, row_c[0])
-                                    )
-                                    conn.commit()
+                                    
+                                    # Mise à jour statut
+                                    with conn.cursor() as cur:
+                                        cur.execute(
+                                            "UPDATE contrats_transport SET statut='VALIDE', signataire=%s "
+                                            "WHERE numero_contrat=%s",
+                                            (role_signataire, row_c[0])
+                                        )
+                                        conn.commit()
                             # CAS 3 : FACTURE DE VENTE
                             elif doc_type == 'facture_vente':
                                 match = re.search(r"INV-(\d+)", doc_ref)
