@@ -2437,9 +2437,6 @@ class BordereauLivraisonPDF(FPDF):
         self.cell(0, 10, _clean_text("Document généré automatiquement — Friends Cameroon Commodities"), align="C")
 
 # =========================================================
-# =========================================================
-# 🚛 CONTRAT DE TRANSPORT ROUTIER — Modèle FCC / OHADA
-# =========================================================
 class ContratTransportPDF(FPDF):
     def footer(self):
         self.set_y(-20)
@@ -2453,12 +2450,7 @@ class ContratTransportPDF(FPDF):
         self.set_text_color(120, 120, 120)
         self.cell(0, 5, _clean_text("FRIENDS CAMEROON COMMODITIES - RCCM : CM-DLA-01-2024-B12-00270 - NIU : M032416606242H"), align="C")
 
-
 def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
-    """
-    Génère un contrat de transport routier de marchandises conforme
-    au modèle FCC / Acte uniforme OHADA du 22 mars 2003.
-    """
     pdf = ContratTransportPDF(orientation='P', unit='mm', format='A4')
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=22)
@@ -2466,21 +2458,22 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
 
     # ----- 1. LOGO + TITRE -----
     try:
-        pdf.image("Logo-FCC.png", x=10, y=8, w=45)
+        pdf.image("Logo-FCC.png", x=10, y=8, w=40)
     except FileNotFoundError:
         pass
 
-    pdf.set_xy(55, 10)
-    _set_font_safely(pdf, "B", 13)
+    pdf.set_xy(50, 10)
+    _set_font_safely(pdf, "B", 12)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(145, 6, "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES", ln=1, align="C")
+    pdf.cell(150, 6, "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES", ln=1, align="C")
 
-    pdf.set_x(55)
-    _set_font_safely(pdf, "BI", 10)
-    pdf.cell(145, 5, _clean_text(f"Contrat n° {data_contrat.get('num', '')}"), ln=1, align="C")
+    pdf.set_x(50)
+    _set_font_safely(pdf, "BI", 9)
+    pdf.cell(150, 5, _clean_text(f"Contrat n° {data_contrat.get('num', '')}"), ln=1, align="C")
 
     pdf.ln(1)
-    _set_font_safely(pdf, "I", 7.5)
+    pdf.set_x(10)
+    _set_font_safely(pdf, "I", 7)
     pdf.multi_cell(190, 3.5,
         _clean_text("Régit par l'Acte uniforme OHADA du 22 mars 2003 relatif aux contrats "
         "de transport de marchandises par route (« l'Acte uniforme »)"),
@@ -2520,125 +2513,67 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
     pdf.ln(6)
 
     # ----- 3. ARTICLES -----
-    # 🔧 FIX : Utilisation de tirets normaux "-" au lieu de "–"
     articles = [
-        ("Article 1 - Objet.",
-         "Le Transporteur s'engage, moyennant prix, à déplacer par route les "
-         "marchandises remises par le Donneur d'ordre (l'expéditeur), du lieu "
-         "de prise en charge au lieu de livraison indiqués ci-dessous. Le "
-         "contrat est constaté par une lettre de voiture établie en un original "
-         "(remis à l'expéditeur) et au moins deux copies (l'une conservée par le "
-         "Transporteur, l'autre accompagnant la marchandise)."),
-        ("Article 2 - Désignation du transport.",
-         "Le transport porte sur les marchandises, lieux et conditions "
-         "détaillés dans le tableau ci-dessous."),
-        ("Article 3 - Obligations du Transporteur.",
-         "Il fournit un véhicule en bon état, adapté à la marchandise ; vérifie "
-         "à la prise en charge le nombre de colis, leurs marques et numéros "
-         "ainsi que l'état apparent de la marchandise et de son emballage, et "
-         "inscrit ses réserves motivées sur la lettre de voiture ; livre la "
-         "marchandise au destinataire, contre décharge et dans le délai convenu, "
-         "après l'avoir avisé de son arrivée ; avise sans délai l'ayant droit de "
-         "tout empêchement au transport ou à la livraison et lui demande des "
-         "instructions."),
-        ("Article 4 - Obligations du Donneur d'ordre.",
-         "Il emballe la marchandise de manière adéquate ; fournit exactement les "
-         "informations, instructions et documents nécessaires ; déclare au "
-         "préalable la nature et la valeur des documents, espèces ou marchandises "
-         "de grande valeur, que le Transporteur n'est pas tenu de transporter ; "
-         "et ne remet aucune marchandise dangereuse. Il répond du préjudice causé "
-         "par un défaut d'emballage, un vice propre de la marchandise, ou "
-         "l'omission, l'insuffisance ou l'inexactitude de ses déclarations."),
-        ("Article 5 - Termes de paiement.",
-         f"Le prix du transport est payable par le Donneur d'ordre de la manière "
-         f"suivante : {data_contrat.get('termes_paiement', '70 % au chargement, 30 % après déchargement au lieu de la livraison.')}"),
-        ("Article 6 - Responsabilité et assurance.",
-         "Le Transporteur répond de l'avarie, de la perte totale ou partielle et "
-         "du retard survenus entre la prise en charge et la livraison, sauf "
-         "exonération prouvée dans les cas prévus à l'article 17 de l'Acte "
-         "uniforme (faute ou ordre de l'ayant droit, vice propre de la "
-         "marchandise, circonstances inévitables et irrémédiables, risques "
-         "particuliers prévus par la loi). L'indemnité est calculée d'après la "
-         "valeur de la marchandise et ne peut excéder 5 000 FCFA par kilogramme "
-         "de poids brut, ou le montant de la valeur déclarée à la lettre de "
-         "voiture ; en cas de retard, elle ne peut excéder le prix du transport. "
-         "Elle porte intérêt à 5 % l'an à compter de la réclamation écrite. "
-         "Toute stipulation contraire à l'Acte uniforme est nulle. Le "
-         "Transporteur justifie d'une assurance de responsabilité civile ; le "
-         "Donneur d'ordre peut assurer sa marchandise, sans que le Transporteur "
-         "puisse se faire céder le bénéfice de cette assurance."),
-        ("Article 7 - Réserves, réclamations et prescription.",
-         "La livraison est constatée par un bon de déchargement ou de réception "
-         "signé par le destinataire, indiquant le tonnage reçu et les éventuelles "
-         "réserves. Le destinataire adresse au Transporteur un avis écrit "
-         "précisant la nature des pertes : au plus tard le premier jour ouvrable "
-         "suivant la livraison si elles sont apparentes ; dans les sept jours de "
-         "la livraison, dimanches et jours fériés non compris, si elles ne le "
-         "sont pas ; et, pour obtenir une indemnité de retard, dans les vingt et "
-         "un jours de l'avis d'arrivée. À défaut, la marchandise est présumée "
-         "reçue dans l'état décrit à la lettre de voiture. Toute action est "
-         "subordonnée à une réclamation écrite adressée au Transporteur au plus "
-         "tard 60 jours après la livraison (ou six mois après la prise en charge "
-         "à défaut de livraison) et se prescrit par un an à compter de la "
-         "livraison (trois ans en cas de dol ou de faute équivalente)."),
-        ("Article 8 - Durée et résiliation.",
-         "Le contrat prend effet à la signature pour ce transport unique. En cas "
-         "de manquement grave non réparé huit (8) jours après mise en demeure par "
-         "lettre recommandée, l'autre partie peut le résilier de plein droit, "
-         "sans préjudice de ses droits à réparation."),
-        ("Article 9 - Confidentialité.",
-         "Les parties s'interdisent de divulguer les informations commerciales "
-         "échangées à l'occasion du présent contrat."),
-        ("Article 10 - Droit applicable et litiges.",
-         "Le contrat est régi par l'Acte uniforme et, pour ce qu'il ne règle pas, "
-         "par le droit camerounais. Les parties recherchent d'abord une solution "
-         "amiable ; à défaut, tout litige est soumis à la juridiction compétente "
-         "de Douala, conformément aux articles 26 et 27 de l'Acte uniforme."),
+        ("Article 1 - Objet.", "Le Transporteur s'engage, moyennant prix, à déplacer par route les marchandises remises par le Donneur d'ordre (l'expéditeur), du lieu de prise en charge au lieu de livraison indiqués ci-dessous. Le contrat est constaté par une lettre de voiture établie en un original (remis à l'expéditeur) et au moins deux copies (l'une conservée par le Transporteur, l'autre accompagnant la marchandise)."),
+        ("Article 2 - Désignation du transport.", "Le transport porte sur les marchandises, lieux et conditions détaillés dans le tableau ci-dessous."),
+        ("Article 3 - Obligations du Transporteur.", "Il fournit un véhicule en bon état, adapté à la marchandise ; vérifie à la prise en charge le nombre de colis, leurs marques et numéros ainsi que l'état apparent de la marchandise et de son emballage, et inscrit ses réserves motivées sur la lettre de voiture ; livre la marchandise au destinataire, contre décharge et dans le délai convenu, après l'avoir avisé de son arrivée ; avise sans délai l'ayant droit de tout empêchement au transport ou à la livraison et lui demande des instructions."),
+        ("Article 4 - Obligations du Donneur d'ordre.", "Il emballe la marchandise de manière adéquate ; fournit exactement les informations, instructions et documents nécessaires ; déclare au préalable la nature et la valeur des documents, espèces ou marchandises de grande valeur, que le Transporteur n'est pas tenu de transporter ; et ne remet aucune marchandise dangereuse. Il répond du préjudice causé par un défaut d'emballage, un vice propre de la marchandise, ou l'omission, l'insuffisance ou l'inexactitude de ses déclarations."),
+        ("Article 5 - Termes de paiement.", f"Le prix du transport est payable par le Donneur d'ordre de la manière suivante : {data_contrat.get('termes_paiement', '70 % au chargement, 30 % après déchargement au lieu de la livraison.')}"),
+        ("Article 6 - Responsabilité et assurance.", "Le Transporteur répond de l'avarie, de la perte totale ou partielle et du retard survenus entre la prise en charge et la livraison, sauf exonération prouvée dans les cas prévus à l'article 17 de l'Acte uniforme (faute ou ordre de l'ayant droit, vice propre de la marchandise, circonstances inévitables et irrémédiables, risques particuliers prévus par la loi). L'indemnité est calculée d'après la valeur de la marchandise et ne peut excéder 5 000 FCFA par kilogramme de poids brut, ou le montant de la valeur déclarée à la lettre de voiture ; en cas de retard, elle ne peut excéder le prix du transport. Elle porte intérêt à 5 % l'an à compter de la réclamation écrite. Toute stipulation contraire à l'Acte uniforme est nulle. Le Transporteur justifie d'une assurance de responsabilité civile ; le Donneur d'ordre peut assurer sa marchandise, sans que le Transporteur puisse se faire céder le bénéfice de cette assurance."),
+        ("Article 7 - Réserves, réclamations et prescription.", "La livraison est constatée par un bon de déchargement ou de réception signé par le destinataire, indiquant le tonnage reçu et les éventuelles réserves. Le destinataire adresse au Transporteur un avis écrit précisant la nature des pertes : au plus tard le premier jour ouvrable suivant la livraison si elles sont apparentes ; dans les sept jours de la livraison, dimanches et jours fériés non compris, si elles ne le sont pas ; et, pour obtenir une indemnité de retard, dans les vingt et un jours de l'avis d'arrivée. À défaut, la marchandise est présumée reçue dans l'état décrit à la lettre de voiture. Toute action est subordonnée à une réclamation écrite adressée au Transporteur au plus tard 60 jours après la livraison (ou six mois après la prise en charge à défaut de livraison) et se prescrit par un an à compter de la livraison (trois ans en cas de dol ou de faute équivalente)."),
+        ("Article 8 - Durée et résiliation.", "Le contrat prend effet à la signature pour ce transport unique. En cas de manquement grave non réparé huit (8) jours après mise en demeure par lettre recommandée, l'autre partie peut le résilier de plein droit, sans préjudice de ses droits à réparation."),
+        ("Article 9 - Confidentialité.", "Les parties s'interdisent de divulguer les informations commerciales échangées à l'occasion du présent contrat."),
+        ("Article 10 - Droit applicable et litiges.", "Le contrat est régi par l'Acte uniforme et, pour ce qu'il ne règle pas, par le droit camerounais. Les parties recherchent d'abord une solution amiable ; à défaut, tout litige est soumis à la juridiction compétente de Douala, conformément aux articles 26 et 27 de l'Acte uniforme."),
     ]
 
     for titre, contenu in articles:
+        pdf.set_x(10)
         _set_font_safely(pdf, "B", 8.5)
         pdf.write(4, _clean_text(titre) + " ")
         _set_font_safely(pdf, "", 8.5)
-        pdf.multi_cell(190, 4, _clean_text(contenu))
+        pdf.multi_cell(0, 4, _clean_text(contenu)) # 0 = prend toute la largeur dispo
         pdf.ln(1)
 
     pdf.ln(2)
 
     # ----- 4. TABLEAU DE DÉSIGNATION -----
+    pdf.set_x(10)
     _set_font_safely(pdf, "B", 9)
     pdf.cell(0, 5, "Tableau récapitulatif du transport :", ln=1)
     pdf.ln(1)
 
-    col_widths = [35, 27, 22, 30, 28, 25, 23]
-    headers = [
-        "Marchandise", "Prise en charge", "Colis /\npoids net",
-        "Prix de la\nPrestation", "Destinataire", "Livraison",
-        "Valeur\ndéclarée"
-    ]
+    # Ajustement des largeurs pour éviter les débordements
+    col_widths = [22, 25, 20, 28, 35, 30, 30] 
+    headers = ["Marchandise", "Prise en charge", "Colis/\nPoids", "Prix\n(FCFA/T)", "Destinataire", "Livraison", "Valeur déclarée"]
 
     pdf.set_fill_color(230, 230, 230)
     pdf.set_draw_color(0, 0, 0)
-    _set_font_safely(pdf, "B", 7)
+    _set_font_safely(pdf, "B", 6.5) # Police plus petite
     for i, h in enumerate(headers):
         pdf.cell(col_widths[i], 7, _clean_text(h), border=1, fill=True, align="C")
     pdf.ln()
 
-    _set_font_safely(pdf, "", 7)
+    _set_font_safely(pdf, "", 6.5)
     for ligne in lignes:
         prix = float(ligne.get('prix_par_tonne', 0) or 0)
-        pdf.cell(col_widths[0], 6, _clean_text(str(ligne.get('marchandise', 'Fèves de Cacao'))), border=1, align="C")
+        pdf.cell(col_widths[0], 6, _clean_text(str(ligne.get('marchandise', ''))), border=1, align="C")
         pdf.cell(col_widths[1], 6, _clean_text(str(ligne.get('lieu_prise_en_charge', ''))), border=1, align="C")
         pdf.cell(col_widths[2], 6, _clean_text(str(ligne.get('colis_poids_net', ''))), border=1, align="C")
-        pdf.cell(col_widths[3], 6, _clean_text(f"{prix:,.0f} FCFA/Tonne"), border=1, align="C")
-        pdf.cell(col_widths[4], 6, _clean_text(str(ligne.get('destinataire', 'FCC'))), border=1, align="C")
-        pdf.cell(col_widths[5], 6, _clean_text(str(ligne.get('lieu_livraison', 'NEALIKO PAD'))), border=1, align="C")
-        pdf.cell(col_widths[6], 6, _clean_text(str(ligne.get('valeur_declaree', 'Cf. Lettre de voiture'))), border=1, align="C")
+        pdf.cell(col_widths[3], 6, _clean_text(f"{prix:,.0f}"), border=1, align="C")
+        
+        # Raccourcir le nom si trop long
+        dest = str(ligne.get('destinataire', 'FCC'))
+        if len(dest) > 25: dest = "FCC"
+        pdf.cell(col_widths[4], 6, _clean_text(dest), border=1, align="C")
+        
+        pdf.cell(col_widths[5], 6, _clean_text(str(ligne.get('lieu_livraison', ''))), border=1, align="C")
+        pdf.cell(col_widths[6], 6, _clean_text(str(ligne.get('valeur_declaree', ''))), border=1, align="C")
         pdf.ln()
 
     pdf.ln(4)
 
     # ----- 5. LIEU & DATE -----
+    pdf.set_x(10)
     _set_font_safely(pdf, "B", 9)
     pdf.cell(0, 5, _clean_text(
              f"Fait à {data_contrat.get('lieu_signature', 'Douala')}, "
@@ -2651,27 +2586,22 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
 
     pdf.set_xy(10, y_sig)
     _set_font_safely(pdf, "B", 9)
-    pdf.multi_cell(
-        90, 4.5,
-        _clean_text("Le Donneur d'ordre\nDépartement Transport & Logistique - FCC"),
-        align="C"
-    )
+    pdf.multi_cell(90, 4.5, _clean_text("Le Donneur d'ordre\nDépartement Transport & Logistique - FCC"), align="C")
 
     pdf.set_xy(100, y_sig)
     pdf.multi_cell(90, 4.5, _clean_text("Le Transporteur"), align="C")
 
-    # Cachet (optionnel)
     if cachet_blob:
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 tmp.write(cachet_blob)
                 tmp_path = tmp.name
-            pdf.image(tmp_path, x=30, y=y_sig + 14, w=45)
+            pdf.image(tmp_path, x=30, y=y_sig + 14, w=40)
             os.remove(tmp_path)
         except Exception as e:
             logging.error(f"Erreur cachet contrat transport : {e}")
 
-    return bytes(pdf.output())    
+    return bytes(pdf.output())
 
 def generer_bordereau_livraison_pdf(data_bl, filename=None):
     num_bl = data_bl.get('num_bl', 'BL-TEMP')
@@ -11237,55 +11167,70 @@ elif choix == "👑 Espace Direction":
                                         res = generer_bon_paiement_pdf(data_p, type_document=doc_type)
                                         pdf_bytes = res[1] if isinstance(res, tuple) else res
 
-                            elif doc_type == 'contrat_transport':
-                                row_c = fetch_one("""
-                                    SELECT ct.numero_contrat, ct.date_signature, ct.lieu_signature,
-                                           ct.termes_paiement, ct.signataire,
-                                           p.nom, p.telephone, p.nui
-                                    FROM contrats_transport ct
-                                    LEFT JOIN prestataires p ON ct.id_prestataire = p.id
+                                                    elif doc_type == 'contrat_transport':
+                            row_c = fetch_one("""
+                                SELECT ct.numero_contrat, ct.date_signature, ct.lieu_signature,
+                                       ct.termes_paiement, ct.signataire,
+                                       p.nom, p.telephone, p.nui
+                                FROM contrats_transport ct
+                                LEFT JOIN prestataires p ON ct.id_prestataire = p.id
+                                WHERE ct.numero_contrat = %s
+                            """, (doc_ref,))
+                            
+                            if row_c:
+                                rows_lignes = fetch_all("""
+                                    SELECT marchandise, lieu_prise_en_charge, colis_poids_net,
+                                           prix_par_tonne, destinataire, lieu_livraison, valeur_declaree
+                                    FROM contrats_transport_lignes ctl
+                                    JOIN contrats_transport ct ON ctl.id_contrat = ct.id
                                     WHERE ct.numero_contrat = %s
+                                    ORDER BY ctl.id
                                 """, (doc_ref,))
-                                if row_c:
-                                    rows_lignes = fetch_all("""
-                                        SELECT marchandise, lieu_prise_en_charge, colis_poids_net,
-                                               prix_par_tonne, destinataire, lieu_livraison, valeur_declaree
-                                        FROM contrats_transport_lignes ctl
-                                        JOIN contrats_transport ct ON ctl.id_contrat = ct.id
-                                        WHERE ct.numero_contrat = %s
-                                        ORDER BY ctl.id
-                                    """, (doc_ref,))
-                                    lignes_pdf = [
-                                        {
-                                            "marchandise": rl[0], "lieu_prise_en_charge": rl[1],
-                                            "colis_poids_net": rl[2],
-                                            "prix_par_tonne": float(rl[3] or 0),
-                                            "destinataire": rl[4], "lieu_livraison": rl[5],
-                                            "valeur_declaree": rl[6],
-                                        } for rl in rows_lignes
-                                    ]
-                                    date_sig = row_c[1].strftime('%d/%m/%Y') if hasattr(row_c[1], 'strftime') else str(row_c[1] or '')
-                                    data_pdf = {
-                                        "num": row_c[0],
-                                        "date_signature": date_sig,
-                                        "lieu_signature": row_c[2] or "Douala",
-                                        "termes_paiement": row_c[3] or "",
-                                        "transporteur_nom": row_c[5] or "N/A",
-                                        "transporteur_cni": "N/A",
-                                        "transporteur_nui": row_c[7] or "N/A",
-                                        "transporteur_telephone": row_c[6] or "N/A",
-                                    }
-                                    pdf_bytes = generer_contrat_transport_pdf(
-                                        data_pdf, lignes_pdf, cachet_blob=cachet_blob
+                                
+                                lignes_pdf = [
+                                    {
+                                        "marchandise": rl[0], "lieu_prise_en_charge": rl[1],
+                                        "colis_poids_net": rl[2],
+                                        "prix_par_tonne": float(rl[3] or 0),
+                                        "destinataire": rl[4], "lieu_livraison": rl[5],
+                                        "valeur_declaree": rl[6],
+                                    } for rl in rows_lignes
+                                ]
+                                
+                                date_sig = row_c[1].strftime('%d/%m/%Y') if hasattr(row_c[1], 'strftime') else str(row_c[1] or '')
+                                data_pdf = {
+                                    "num": row_c[0],
+                                    "date_signature": date_sig,
+                                    "lieu_signature": row_c[2] or "Douala",
+                                    "termes_paiement": row_c[3] or "",
+                                    "transporteur_nom": row_c[5] or "N/A",
+                                    "transporteur_cni": "N/A",
+                                    "transporteur_nui": row_c[7] or "N/A",
+                                    "transporteur_telephone": row_c[6] or "N/A",
+                                }
+
+                                # 🔧 LA CORRECTION EST ICI : On récupère le cachet AVANT de générer
+                                cachet_a_utiliser = None
+                                if role_signataire:
+                                    res_cachet = fetch_one(
+                                        "SELECT fichier_cachet FROM cachets_direction WHERE role_signataire = %s",
+                                        (role_signataire,)
                                     )
-                                    # Mise à jour statut
-                                    with conn.cursor() as cur:
-                                        cur.execute(
-                                            "UPDATE contrats_transport SET statut='VALIDE', signataire=%s "
-                                            "WHERE numero_contrat=%s",
-                                            (role_signataire, row_c[0])
-                                        )
-                                        conn.commit()
+                                    if res_cachet:
+                                        cachet_a_utiliser = res_cachet[0]
+
+                                pdf_bytes = generer_contrat_transport_pdf(
+                                    data_pdf, lignes_pdf, cachet_blob=cachet_a_utiliser
+                                )
+                                
+                                # Mise à jour statut
+                                with conn.cursor() as cur:
+                                    cur.execute(
+                                        "UPDATE contrats_transport SET statut='VALIDE', signataire=%s "
+                                        "WHERE numero_contrat=%s",
+                                        (role_signataire, row_c[0])
+                                    )
+                                    conn.commit()
                             # CAS 3 : FACTURE DE VENTE
                             elif doc_type == 'facture_vente':
                                 match = re.search(r"INV-(\d+)", doc_ref)
