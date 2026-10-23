@@ -7293,7 +7293,7 @@ elif choix == "🏗️ Prestataires & Transitaires":
     ])
 
     # ------------------------------------------------------------------
-    # Fonction CRUD générique (existante, conservée telle quelle)
+    # Fonction CRUD générique (CORRIGÉE pour les dates)
     # ------------------------------------------------------------------
     def gerer_p_t(table_name, tab_object):
         with tab_object:
@@ -7311,18 +7311,24 @@ elif choix == "🏗️ Prestataires & Transitaires":
                     bp = c4.text_input("Boite Postale (BP)")
                     if st.form_submit_button("Enregistrer"):
                         if nom:
-                            with conn.cursor() as cur:
-                                cur.execute(
-                                    f"INSERT INTO {table_name} "
-                                    f"(nom, nui, rccm, telephone, bp, date_ajout) "
-                                    f"VALUES (%s,%s,%s,%s,%s,%s)",
-                                    (nom, nui, rccm, tel, bp,
-                                     datetime.now().strftime("%d/%m/%Y"))
-                                )
-                                conn.commit()
-                            log_action(f"Ajout {table_name} {nom}")
-                            st.success("Ajouté !")
-                            st.rerun()
+                            try:
+                                with conn.cursor() as cur:
+                                    # 🔧 FIX : Format de date YYYY-MM-DD pour PostgreSQL
+                                    date_aujourdhui = datetime.now().strftime("%Y-%m-%d")
+                                    
+                                    cur.execute(
+                                        f"INSERT INTO {table_name} "
+                                        f"(nom, nui, rccm, telephone, bp, date_ajout) "
+                                        f"VALUES (%s,%s,%s,%s,%s,%s)",
+                                        (nom, nui, rccm, tel, bp, date_aujourdhui)
+                                    )
+                                    conn.commit()
+                                log_action(f"Ajout {table_name} {nom}")
+                                st.success("Ajouté !")
+                                st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"❌ Erreur lors de l'ajout : {e}")
                         else:
                             st.error("Le nom est obligatoire.")
 
@@ -7345,16 +7351,20 @@ elif choix == "🏗️ Prestataires & Transitaires":
                         m_tel = st.text_input("Telephone", value=curr[3] if curr else "")
                         m_bp = st.text_input("BP", value=curr[4] if curr else "")
                         if st.form_submit_button("Appliquer les modifications"):
-                            with conn.cursor() as cur:
-                                cur.execute(
-                                    f"UPDATE {table_name} SET nom=%s, nui=%s, rccm=%s, "
-                                    f"telephone=%s, bp=%s WHERE id=%s",
-                                    (m_nom, m_nui, m_rccm, m_tel, m_bp, id_m)
-                                )
-                                conn.commit()
-                            log_action(f"Modification {table_name} ID {id_m}")
-                            st.success("Modifié !")
-                            st.rerun()
+                            try:
+                                with conn.cursor() as cur:
+                                    cur.execute(
+                                        f"UPDATE {table_name} SET nom=%s, nui=%s, rccm=%s, "
+                                        f"telephone=%s, bp=%s WHERE id=%s",
+                                        (m_nom, m_nui, m_rccm, m_tel, m_bp, id_m)
+                                    )
+                                    conn.commit()
+                                log_action(f"Modification {table_name} ID {id_m}")
+                                st.success("Modifié !")
+                                st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"❌ Erreur : {e}")
                 else:
                     st.info("Aucune donnée disponible.")
 
@@ -7367,12 +7377,16 @@ elif choix == "🏗️ Prestataires & Transitaires":
                     )
                     id_d = dict_del[chosen_del]
                     if st.button("❌ Supprimer", type="primary", key=f"btn_del_{table_name}"):
-                        with conn.cursor() as cur:
-                            cur.execute(f"DELETE FROM {table_name} WHERE id=%s", (id_d,))
-                            conn.commit()
-                        log_action(f"Suppression {table_name} ID {id_d}")
-                        st.success("Supprimé !")
-                        st.rerun()
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute(f"DELETE FROM {table_name} WHERE id=%s", (id_d,))
+                                conn.commit()
+                            log_action(f"Suppression {table_name} ID {id_d}")
+                            st.success("Supprimé !")
+                            st.rerun()
+                        except Exception as e:
+                            conn.rollback()
+                            st.error(f"❌ Erreur : {e}")
                 else:
                     st.info("Aucune donnée à supprimer.")
 
