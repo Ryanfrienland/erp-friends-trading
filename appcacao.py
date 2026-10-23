@@ -2437,6 +2437,7 @@ class BordereauLivraisonPDF(FPDF):
         self.cell(0, 10, _clean_text("Document généré automatiquement — Friends Cameroon Commodities"), align="C")
 
 # =========================================================
+# =========================================================
 # 🚛 CONTRAT DE TRANSPORT ROUTIER — Modèle FCC / OHADA
 # =========================================================
 class ContratTransportPDF(FPDF):
@@ -2448,32 +2449,15 @@ class ContratTransportPDF(FPDF):
                 return
             except Exception:
                 pass
-        self.set_font("Helvetica", "I", 7)
+        _set_font_safely(self, "I", 7)
         self.set_text_color(120, 120, 120)
-        self.cell(0, 5,
-                  "FRIENDS CAMEROON COMMODITIES - RCCM : CM-DLA-01-2024-B12-00270 - NIU : M032416606242H",
-                  align="C")
+        self.cell(0, 5, _clean_text("FRIENDS CAMEROON COMMODITIES - RCCM : CM-DLA-01-2024-B12-00270 - NIU : M032416606242H"), align="C")
 
 
 def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
     """
     Génère un contrat de transport routier de marchandises conforme
     au modèle FCC / Acte uniforme OHADA du 22 mars 2003.
-
-    Args:
-        data_contrat (dict): {
-            num, date_signature, lieu_signature, termes_paiement,
-            transporteur_nom, transporteur_cni,
-            transporteur_nui, transporteur_telephone
-        }
-        lignes (list[dict]): [
-            {marchandise, lieu_prise_en_charge, colis_poids_net,
-             prix_par_tonne, destinataire, lieu_livraison, valeur_declaree}
-        ]
-        cachet_blob (bytes|None): Cachet de la Direction (optionnel).
-
-    Returns:
-        bytes: Contenu PDF en mémoire.
     """
     pdf = ContratTransportPDF(orientation='P', unit='mm', format='A4')
     pdf.add_page()
@@ -2487,22 +2471,19 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
         pass
 
     pdf.set_xy(55, 10)
-    pdf.set_font("Helvetica", "B", 13)
+    _set_font_safely(pdf, "B", 13)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(145, 6, "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES",
-             ln=1, align="C")
+    pdf.cell(145, 6, "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES", ln=1, align="C")
 
     pdf.set_x(55)
-    pdf.set_font("Helvetica", "BI", 10)
-    pdf.cell(145, 5,
-             f"Contrat n° {data_contrat.get('num', '')}",
-             ln=1, align="C")
+    _set_font_safely(pdf, "BI", 10)
+    pdf.cell(145, 5, _clean_text(f"Contrat n° {data_contrat.get('num', '')}"), ln=1, align="C")
 
     pdf.ln(1)
-    pdf.set_font("Helvetica", "I", 7.5)
+    _set_font_safely(pdf, "I", 7.5)
     pdf.multi_cell(190, 3.5,
-        "Régit par l'Acte uniforme OHADA du 22 mars 2003 relatif aux contrats "
-        "de transport de marchandises par route (« l'Acte uniforme »)",
+        _clean_text("Régit par l'Acte uniforme OHADA du 22 mars 2003 relatif aux contrats "
+        "de transport de marchandises par route (« l'Acte uniforme »)"),
         align="C")
 
     pdf.ln(2)
@@ -2517,10 +2498,10 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
         "Département Transport et Logistique, ci-après « le Donneur d'ordre » ;"
     )
 
-    pdf.set_font("Helvetica", "B", 8.5)
+    _set_font_safely(pdf, "B", 8.5)
     pdf.write(4, "ENTRE : ")
-    pdf.set_font("Helvetica", "", 8.5)
-    pdf.write(4, entreprise_info)
+    _set_font_safely(pdf, "", 8.5)
+    pdf.write(4, _clean_text(entreprise_info))
     pdf.ln(5)
 
     transporteur_nom = data_contrat.get('transporteur_nom', 'N/A')
@@ -2528,29 +2509,30 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
     transporteur_nui = data_contrat.get('transporteur_nui', 'N/A')
     transporteur_tel = data_contrat.get('transporteur_telephone', 'N/A')
 
-    pdf.set_font("Helvetica", "B", 8.5)
+    _set_font_safely(pdf, "B", 8.5)
     pdf.write(4, "ET : ")
-    pdf.set_font("Helvetica", "", 8.5)
-    pdf.write(4,
+    _set_font_safely(pdf, "", 8.5)
+    pdf.write(4, _clean_text(
         f"M./Mme {transporteur_nom}, CNI : [{transporteur_cni}], "
         f"NUI : [{transporteur_nui}], Téléphone : [{transporteur_tel}], "
         f"ci-après « le Transporteur »."
-    )
+    ))
     pdf.ln(6)
 
     # ----- 3. ARTICLES -----
+    # 🔧 FIX : Utilisation de tirets normaux "-" au lieu de "–"
     articles = [
-        ("Article 1 – Objet.",
+        ("Article 1 - Objet.",
          "Le Transporteur s'engage, moyennant prix, à déplacer par route les "
          "marchandises remises par le Donneur d'ordre (l'expéditeur), du lieu "
          "de prise en charge au lieu de livraison indiqués ci-dessous. Le "
          "contrat est constaté par une lettre de voiture établie en un original "
          "(remis à l'expéditeur) et au moins deux copies (l'une conservée par le "
          "Transporteur, l'autre accompagnant la marchandise)."),
-        ("Article 2 – Désignation du transport.",
+        ("Article 2 - Désignation du transport.",
          "Le transport porte sur les marchandises, lieux et conditions "
          "détaillés dans le tableau ci-dessous."),
-        ("Article 3 – Obligations du Transporteur.",
+        ("Article 3 - Obligations du Transporteur.",
          "Il fournit un véhicule en bon état, adapté à la marchandise ; vérifie "
          "à la prise en charge le nombre de colis, leurs marques et numéros "
          "ainsi que l'état apparent de la marchandise et de son emballage, et "
@@ -2559,7 +2541,7 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
          "après l'avoir avisé de son arrivée ; avise sans délai l'ayant droit de "
          "tout empêchement au transport ou à la livraison et lui demande des "
          "instructions."),
-        ("Article 4 – Obligations du Donneur d'ordre.",
+        ("Article 4 - Obligations du Donneur d'ordre.",
          "Il emballe la marchandise de manière adéquate ; fournit exactement les "
          "informations, instructions et documents nécessaires ; déclare au "
          "préalable la nature et la valeur des documents, espèces ou marchandises "
@@ -2567,10 +2549,10 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
          "et ne remet aucune marchandise dangereuse. Il répond du préjudice causé "
          "par un défaut d'emballage, un vice propre de la marchandise, ou "
          "l'omission, l'insuffisance ou l'inexactitude de ses déclarations."),
-        ("Article 5 – Termes de paiement.",
+        ("Article 5 - Termes de paiement.",
          f"Le prix du transport est payable par le Donneur d'ordre de la manière "
          f"suivante : {data_contrat.get('termes_paiement', '70 % au chargement, 30 % après déchargement au lieu de la livraison.')}"),
-        ("Article 6 – Responsabilité et assurance.",
+        ("Article 6 - Responsabilité et assurance.",
          "Le Transporteur répond de l'avarie, de la perte totale ou partielle et "
          "du retard survenus entre la prise en charge et la livraison, sauf "
          "exonération prouvée dans les cas prévus à l'article 17 de l'Acte "
@@ -2585,7 +2567,7 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
          "Transporteur justifie d'une assurance de responsabilité civile ; le "
          "Donneur d'ordre peut assurer sa marchandise, sans que le Transporteur "
          "puisse se faire céder le bénéfice de cette assurance."),
-        ("Article 7 – Réserves, réclamations et prescription.",
+        ("Article 7 - Réserves, réclamations et prescription.",
          "La livraison est constatée par un bon de déchargement ou de réception "
          "signé par le destinataire, indiquant le tonnage reçu et les éventuelles "
          "réserves. Le destinataire adresse au Transporteur un avis écrit "
@@ -2599,15 +2581,15 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
          "tard 60 jours après la livraison (ou six mois après la prise en charge "
          "à défaut de livraison) et se prescrit par un an à compter de la "
          "livraison (trois ans en cas de dol ou de faute équivalente)."),
-        ("Article 8 – Durée et résiliation.",
+        ("Article 8 - Durée et résiliation.",
          "Le contrat prend effet à la signature pour ce transport unique. En cas "
          "de manquement grave non réparé huit (8) jours après mise en demeure par "
          "lettre recommandée, l'autre partie peut le résilier de plein droit, "
          "sans préjudice de ses droits à réparation."),
-        ("Article 9 – Confidentialité.",
+        ("Article 9 - Confidentialité.",
          "Les parties s'interdisent de divulguer les informations commerciales "
          "échangées à l'occasion du présent contrat."),
-        ("Article 10 – Droit applicable et litiges.",
+        ("Article 10 - Droit applicable et litiges.",
          "Le contrat est régi par l'Acte uniforme et, pour ce qu'il ne règle pas, "
          "par le droit camerounais. Les parties recherchent d'abord une solution "
          "amiable ; à défaut, tout litige est soumis à la juridiction compétente "
@@ -2615,16 +2597,16 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
     ]
 
     for titre, contenu in articles:
-        pdf.set_font("Helvetica", "B", 8.5)
-        pdf.write(4, titre + " ")
-        pdf.set_font("Helvetica", "", 8.5)
-        pdf.multi_cell(190, 4, contenu)
+        _set_font_safely(pdf, "B", 8.5)
+        pdf.write(4, _clean_text(titre) + " ")
+        _set_font_safely(pdf, "", 8.5)
+        pdf.multi_cell(190, 4, _clean_text(contenu))
         pdf.ln(1)
 
     pdf.ln(2)
 
     # ----- 4. TABLEAU DE DÉSIGNATION -----
-    pdf.set_font("Helvetica", "B", 9)
+    _set_font_safely(pdf, "B", 9)
     pdf.cell(0, 5, "Tableau récapitulatif du transport :", ln=1)
     pdf.ln(1)
 
@@ -2637,47 +2619,46 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
 
     pdf.set_fill_color(230, 230, 230)
     pdf.set_draw_color(0, 0, 0)
-    pdf.set_font("Helvetica", "B", 7)
+    _set_font_safely(pdf, "B", 7)
     for i, h in enumerate(headers):
-        pdf.cell(col_widths[i], 7, h, border=1, fill=True, align="C")
+        pdf.cell(col_widths[i], 7, _clean_text(h), border=1, fill=True, align="C")
     pdf.ln()
 
-    pdf.set_font("Helvetica", "", 7)
+    _set_font_safely(pdf, "", 7)
     for ligne in lignes:
         prix = float(ligne.get('prix_par_tonne', 0) or 0)
-        pdf.cell(col_widths[0], 6, str(ligne.get('marchandise', 'Fèves de Cacao')), border=1, align="C")
-        pdf.cell(col_widths[1], 6, str(ligne.get('lieu_prise_en_charge', '')), border=1, align="C")
-        pdf.cell(col_widths[2], 6, str(ligne.get('colis_poids_net', '')), border=1, align="C")
-        pdf.cell(col_widths[3], 6, f"{prix:,.0f} FCFA/Tonne", border=1, align="C")
-        pdf.cell(col_widths[4], 6, str(ligne.get('destinataire', 'FCC')), border=1, align="C")
-        pdf.cell(col_widths[5], 6, str(ligne.get('lieu_livraison', 'NEALIKO PAD')), border=1, align="C")
-        pdf.cell(col_widths[6], 6, str(ligne.get('valeur_declaree', 'Cf. Lettre de voiture')), border=1, align="C")
+        pdf.cell(col_widths[0], 6, _clean_text(str(ligne.get('marchandise', 'Fèves de Cacao'))), border=1, align="C")
+        pdf.cell(col_widths[1], 6, _clean_text(str(ligne.get('lieu_prise_en_charge', ''))), border=1, align="C")
+        pdf.cell(col_widths[2], 6, _clean_text(str(ligne.get('colis_poids_net', ''))), border=1, align="C")
+        pdf.cell(col_widths[3], 6, _clean_text(f"{prix:,.0f} FCFA/Tonne"), border=1, align="C")
+        pdf.cell(col_widths[4], 6, _clean_text(str(ligne.get('destinataire', 'FCC'))), border=1, align="C")
+        pdf.cell(col_widths[5], 6, _clean_text(str(ligne.get('lieu_livraison', 'NEALIKO PAD'))), border=1, align="C")
+        pdf.cell(col_widths[6], 6, _clean_text(str(ligne.get('valeur_declaree', 'Cf. Lettre de voiture'))), border=1, align="C")
         pdf.ln()
 
     pdf.ln(4)
 
     # ----- 5. LIEU & DATE -----
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(0, 5,
+    _set_font_safely(pdf, "B", 9)
+    pdf.cell(0, 5, _clean_text(
              f"Fait à {data_contrat.get('lieu_signature', 'Douala')}, "
              f"le {data_contrat.get('date_signature', '')}, "
-             f"en deux (2) exemplaires originaux.",
-             ln=1)
+             f"en deux (2) exemplaires originaux."), ln=1)
     pdf.ln(6)
 
     # ----- 6. SIGNATURES -----
     y_sig = pdf.get_y()
 
     pdf.set_xy(10, y_sig)
-    pdf.set_font("Helvetica", "B", 9)
+    _set_font_safely(pdf, "B", 9)
     pdf.multi_cell(
         90, 4.5,
-        "Le Donneur d'ordre\nDépartement Transport & Logistique - FCC",
+        _clean_text("Le Donneur d'ordre\nDépartement Transport & Logistique - FCC"),
         align="C"
     )
 
     pdf.set_xy(100, y_sig)
-    pdf.multi_cell(90, 4.5, "Le Transporteur", align="C")
+    pdf.multi_cell(90, 4.5, _clean_text("Le Transporteur"), align="C")
 
     # Cachet (optionnel)
     if cachet_blob:
