@@ -2436,6 +2436,261 @@ class BordereauLivraisonPDF(FPDF):
         self.set_text_color(148, 163, 184)
         self.cell(0, 10, _clean_text("Document généré automatiquement — Friends Cameroon Commodities"), align="C")
 
+# =========================================================
+# 🚛 CONTRAT DE TRANSPORT ROUTIER — Modèle FCC / OHADA
+# =========================================================
+class ContratTransportPDF(FPDF):
+    def footer(self):
+        self.set_y(-20)
+        if os.path.exists("Footer-FCC.png"):
+            try:
+                self.image("Footer-FCC.png", x=10, y=self.get_y(), w=190)
+                return
+            except Exception:
+                pass
+        self.set_font("Helvetica", "I", 7)
+        self.set_text_color(120, 120, 120)
+        self.cell(0, 5,
+                  "FRIENDS CAMEROON COMMODITIES - RCCM : CM-DLA-01-2024-B12-00270 - NIU : M032416606242H",
+                  align="C")
+
+
+def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
+    """
+    Génère un contrat de transport routier de marchandises conforme
+    au modèle FCC / Acte uniforme OHADA du 22 mars 2003.
+
+    Args:
+        data_contrat (dict): {
+            num, date_signature, lieu_signature, termes_paiement,
+            transporteur_nom, transporteur_cni,
+            transporteur_nui, transporteur_telephone
+        }
+        lignes (list[dict]): [
+            {marchandise, lieu_prise_en_charge, colis_poids_net,
+             prix_par_tonne, destinataire, lieu_livraison, valeur_declaree}
+        ]
+        cachet_blob (bytes|None): Cachet de la Direction (optionnel).
+
+    Returns:
+        bytes: Contenu PDF en mémoire.
+    """
+    pdf = ContratTransportPDF(orientation='P', unit='mm', format='A4')
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=22)
+    pdf.set_margins(10, 10, 10)
+
+    # ----- 1. LOGO + TITRE -----
+    try:
+        pdf.image("Logo-FCC.png", x=10, y=8, w=45)
+    except FileNotFoundError:
+        pass
+
+    pdf.set_xy(55, 10)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(145, 6, "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES",
+             ln=1, align="C")
+
+    pdf.set_x(55)
+    pdf.set_font("Helvetica", "BI", 10)
+    pdf.cell(145, 5,
+             f"Contrat n° {data_contrat.get('num', '')}",
+             ln=1, align="C")
+
+    pdf.ln(1)
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.multi_cell(190, 3.5,
+        "Régit par l'Acte uniforme OHADA du 22 mars 2003 relatif aux contrats "
+        "de transport de marchandises par route (« l'Acte uniforme »)",
+        align="C")
+
+    pdf.ln(2)
+    pdf.set_draw_color(0, 0, 0)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(2)
+
+    # ----- 2. PARTIES -----
+    entreprise_info = (
+        "FRIENDS CAMEROON COMMODITIES (FCC), SARL, RCCM n° [CM-DLA-01-2024-B12-00270], "
+        "NIU : [M032416606242H], siège social à Douala, représentée par le "
+        "Département Transport et Logistique, ci-après « le Donneur d'ordre » ;"
+    )
+
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.write(4, "ENTRE : ")
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.write(4, entreprise_info)
+    pdf.ln(5)
+
+    transporteur_nom = data_contrat.get('transporteur_nom', 'N/A')
+    transporteur_cni = data_contrat.get('transporteur_cni', 'N/A')
+    transporteur_nui = data_contrat.get('transporteur_nui', 'N/A')
+    transporteur_tel = data_contrat.get('transporteur_telephone', 'N/A')
+
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.write(4, "ET : ")
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.write(4,
+        f"M./Mme {transporteur_nom}, CNI : [{transporteur_cni}], "
+        f"NUI : [{transporteur_nui}], Téléphone : [{transporteur_tel}], "
+        f"ci-après « le Transporteur »."
+    )
+    pdf.ln(6)
+
+    # ----- 3. ARTICLES -----
+    articles = [
+        ("Article 1 – Objet.",
+         "Le Transporteur s'engage, moyennant prix, à déplacer par route les "
+         "marchandises remises par le Donneur d'ordre (l'expéditeur), du lieu "
+         "de prise en charge au lieu de livraison indiqués ci-dessous. Le "
+         "contrat est constaté par une lettre de voiture établie en un original "
+         "(remis à l'expéditeur) et au moins deux copies (l'une conservée par le "
+         "Transporteur, l'autre accompagnant la marchandise)."),
+        ("Article 2 – Désignation du transport.",
+         "Le transport porte sur les marchandises, lieux et conditions "
+         "détaillés dans le tableau ci-dessous."),
+        ("Article 3 – Obligations du Transporteur.",
+         "Il fournit un véhicule en bon état, adapté à la marchandise ; vérifie "
+         "à la prise en charge le nombre de colis, leurs marques et numéros "
+         "ainsi que l'état apparent de la marchandise et de son emballage, et "
+         "inscrit ses réserves motivées sur la lettre de voiture ; livre la "
+         "marchandise au destinataire, contre décharge et dans le délai convenu, "
+         "après l'avoir avisé de son arrivée ; avise sans délai l'ayant droit de "
+         "tout empêchement au transport ou à la livraison et lui demande des "
+         "instructions."),
+        ("Article 4 – Obligations du Donneur d'ordre.",
+         "Il emballe la marchandise de manière adéquate ; fournit exactement les "
+         "informations, instructions et documents nécessaires ; déclare au "
+         "préalable la nature et la valeur des documents, espèces ou marchandises "
+         "de grande valeur, que le Transporteur n'est pas tenu de transporter ; "
+         "et ne remet aucune marchandise dangereuse. Il répond du préjudice causé "
+         "par un défaut d'emballage, un vice propre de la marchandise, ou "
+         "l'omission, l'insuffisance ou l'inexactitude de ses déclarations."),
+        ("Article 5 – Termes de paiement.",
+         f"Le prix du transport est payable par le Donneur d'ordre de la manière "
+         f"suivante : {data_contrat.get('termes_paiement', '70 % au chargement, 30 % après déchargement au lieu de la livraison.')}"),
+        ("Article 6 – Responsabilité et assurance.",
+         "Le Transporteur répond de l'avarie, de la perte totale ou partielle et "
+         "du retard survenus entre la prise en charge et la livraison, sauf "
+         "exonération prouvée dans les cas prévus à l'article 17 de l'Acte "
+         "uniforme (faute ou ordre de l'ayant droit, vice propre de la "
+         "marchandise, circonstances inévitables et irrémédiables, risques "
+         "particuliers prévus par la loi). L'indemnité est calculée d'après la "
+         "valeur de la marchandise et ne peut excéder 5 000 FCFA par kilogramme "
+         "de poids brut, ou le montant de la valeur déclarée à la lettre de "
+         "voiture ; en cas de retard, elle ne peut excéder le prix du transport. "
+         "Elle porte intérêt à 5 % l'an à compter de la réclamation écrite. "
+         "Toute stipulation contraire à l'Acte uniforme est nulle. Le "
+         "Transporteur justifie d'une assurance de responsabilité civile ; le "
+         "Donneur d'ordre peut assurer sa marchandise, sans que le Transporteur "
+         "puisse se faire céder le bénéfice de cette assurance."),
+        ("Article 7 – Réserves, réclamations et prescription.",
+         "La livraison est constatée par un bon de déchargement ou de réception "
+         "signé par le destinataire, indiquant le tonnage reçu et les éventuelles "
+         "réserves. Le destinataire adresse au Transporteur un avis écrit "
+         "précisant la nature des pertes : au plus tard le premier jour ouvrable "
+         "suivant la livraison si elles sont apparentes ; dans les sept jours de "
+         "la livraison, dimanches et jours fériés non compris, si elles ne le "
+         "sont pas ; et, pour obtenir une indemnité de retard, dans les vingt et "
+         "un jours de l'avis d'arrivée. À défaut, la marchandise est présumée "
+         "reçue dans l'état décrit à la lettre de voiture. Toute action est "
+         "subordonnée à une réclamation écrite adressée au Transporteur au plus "
+         "tard 60 jours après la livraison (ou six mois après la prise en charge "
+         "à défaut de livraison) et se prescrit par un an à compter de la "
+         "livraison (trois ans en cas de dol ou de faute équivalente)."),
+        ("Article 8 – Durée et résiliation.",
+         "Le contrat prend effet à la signature pour ce transport unique. En cas "
+         "de manquement grave non réparé huit (8) jours après mise en demeure par "
+         "lettre recommandée, l'autre partie peut le résilier de plein droit, "
+         "sans préjudice de ses droits à réparation."),
+        ("Article 9 – Confidentialité.",
+         "Les parties s'interdisent de divulguer les informations commerciales "
+         "échangées à l'occasion du présent contrat."),
+        ("Article 10 – Droit applicable et litiges.",
+         "Le contrat est régi par l'Acte uniforme et, pour ce qu'il ne règle pas, "
+         "par le droit camerounais. Les parties recherchent d'abord une solution "
+         "amiable ; à défaut, tout litige est soumis à la juridiction compétente "
+         "de Douala, conformément aux articles 26 et 27 de l'Acte uniforme."),
+    ]
+
+    for titre, contenu in articles:
+        pdf.set_font("Helvetica", "B", 8.5)
+        pdf.write(4, titre + " ")
+        pdf.set_font("Helvetica", "", 8.5)
+        pdf.multi_cell(190, 4, contenu)
+        pdf.ln(1)
+
+    pdf.ln(2)
+
+    # ----- 4. TABLEAU DE DÉSIGNATION -----
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(0, 5, "Tableau récapitulatif du transport :", ln=1)
+    pdf.ln(1)
+
+    col_widths = [35, 27, 22, 30, 28, 25, 23]
+    headers = [
+        "Marchandise", "Prise en charge", "Colis /\npoids net",
+        "Prix de la\nPrestation", "Destinataire", "Livraison",
+        "Valeur\ndéclarée"
+    ]
+
+    pdf.set_fill_color(230, 230, 230)
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_font("Helvetica", "B", 7)
+    for i, h in enumerate(headers):
+        pdf.cell(col_widths[i], 7, h, border=1, fill=True, align="C")
+    pdf.ln()
+
+    pdf.set_font("Helvetica", "", 7)
+    for ligne in lignes:
+        prix = float(ligne.get('prix_par_tonne', 0) or 0)
+        pdf.cell(col_widths[0], 6, str(ligne.get('marchandise', 'Fèves de Cacao')), border=1, align="C")
+        pdf.cell(col_widths[1], 6, str(ligne.get('lieu_prise_en_charge', '')), border=1, align="C")
+        pdf.cell(col_widths[2], 6, str(ligne.get('colis_poids_net', '')), border=1, align="C")
+        pdf.cell(col_widths[3], 6, f"{prix:,.0f} FCFA/Tonne", border=1, align="C")
+        pdf.cell(col_widths[4], 6, str(ligne.get('destinataire', 'FCC')), border=1, align="C")
+        pdf.cell(col_widths[5], 6, str(ligne.get('lieu_livraison', 'NEALIKO PAD')), border=1, align="C")
+        pdf.cell(col_widths[6], 6, str(ligne.get('valeur_declaree', 'Cf. Lettre de voiture')), border=1, align="C")
+        pdf.ln()
+
+    pdf.ln(4)
+
+    # ----- 5. LIEU & DATE -----
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(0, 5,
+             f"Fait à {data_contrat.get('lieu_signature', 'Douala')}, "
+             f"le {data_contrat.get('date_signature', '')}, "
+             f"en deux (2) exemplaires originaux.",
+             ln=1)
+    pdf.ln(6)
+
+    # ----- 6. SIGNATURES -----
+    y_sig = pdf.get_y()
+
+    pdf.set_xy(10, y_sig)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.multi_cell(
+        90, 4.5,
+        "Le Donneur d'ordre\nDépartement Transport & Logistique - FCC",
+        align="C"
+    )
+
+    pdf.set_xy(100, y_sig)
+    pdf.multi_cell(90, 4.5, "Le Transporteur", align="C")
+
+    # Cachet (optionnel)
+    if cachet_blob:
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(cachet_blob)
+                tmp_path = tmp.name
+            pdf.image(tmp_path, x=30, y=y_sig + 14, w=45)
+            os.remove(tmp_path)
+        except Exception as e:
+            logging.error(f"Erreur cachet contrat transport : {e}")
+
+    return bytes(pdf.output())    
 
 def generer_bordereau_livraison_pdf(data_bl, filename=None):
     num_bl = data_bl.get('num_bl', 'BL-TEMP')
@@ -6992,11 +7247,56 @@ elif choix == "👥 Clients":
             
 elif choix == "🏗️ Prestataires & Transitaires":
     st.title("🏗️ Prestataires & Transitaires")
-    t1, t2 = st.tabs(["🏢 Prestataires", "🚢 Transitaires"])
+    st.caption("Répertoire + Génération des contrats de transport routier conformes OHADA")
 
+    # ------------------------------------------------------------------
+    # Création des tables si elles n'existent pas (silencieux)
+    # ------------------------------------------------------------------
+    try:
+        with conn.cursor() as _cur:
+            _cur.execute("""
+                CREATE TABLE IF NOT EXISTS contrats_transport (
+                    id SERIAL PRIMARY KEY,
+                    numero_contrat VARCHAR(100) UNIQUE NOT NULL,
+                    id_prestataire INTEGER NOT NULL,
+                    date_signature DATE,
+                    lieu_signature VARCHAR(100) DEFAULT 'Douala',
+                    statut VARCHAR(50) DEFAULT 'EN_ATTENTE',
+                    signataire VARCHAR(50),
+                    termes_paiement TEXT,
+                    created_by VARCHAR(100),
+                    date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            _cur.execute("""
+                CREATE TABLE IF NOT EXISTS contrats_transport_lignes (
+                    id SERIAL PRIMARY KEY,
+                    id_contrat INTEGER NOT NULL
+                        REFERENCES contrats_transport(id) ON DELETE CASCADE,
+                    marchandise VARCHAR(200),
+                    lieu_prise_en_charge VARCHAR(200),
+                    colis_poids_net VARCHAR(100),
+                    prix_par_tonne NUMERIC(15,2),
+                    destinataire VARCHAR(200),
+                    lieu_livraison VARCHAR(200),
+                    valeur_declaree VARCHAR(200)
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        logging.error(f"Erreur création tables contrats_transport : {e}")
+
+    t1, t2, t3 = st.tabs([
+        "🏢 Prestataires",
+        "🚢 Transitaires",
+        "📝 Contrats de Transport"
+    ])
+
+    # ------------------------------------------------------------------
+    # Fonction CRUD générique (existante, conservée telle quelle)
+    # ------------------------------------------------------------------
     def gerer_p_t(table_name, tab_object):
         with tab_object:
-            # Récupération des éléments avec un curseur local
             items = fetch_all(f"SELECT id, nom FROM {table_name}")
             sub1, sub2, sub3 = st.tabs(["➕ Ajouter", "📝 Modifier", "🗑️ Supprimer"])
 
@@ -7013,8 +7313,11 @@ elif choix == "🏗️ Prestataires & Transitaires":
                         if nom:
                             with conn.cursor() as cur:
                                 cur.execute(
-                                    f"INSERT INTO {table_name} (nom, nui, rccm, telephone, bp, date_ajout) VALUES (%s,%s,%s,%s,%s,%s)",
-                                    (nom, nui, rccm, tel, bp, datetime.now().strftime("%d/%m/%Y"))
+                                    f"INSERT INTO {table_name} "
+                                    f"(nom, nui, rccm, telephone, bp, date_ajout) "
+                                    f"VALUES (%s,%s,%s,%s,%s,%s)",
+                                    (nom, nui, rccm, tel, bp,
+                                     datetime.now().strftime("%d/%m/%Y"))
                                 )
                                 conn.commit()
                             log_action(f"Ajout {table_name} {nom}")
@@ -7026,10 +7329,15 @@ elif choix == "🏗️ Prestataires & Transitaires":
             with sub2:
                 if items:
                     dict_items = {f"{i[1]} (ID: {i[0]})": i[0] for i in items}
-                    chosen_item = st.selectbox("Selectionner l'element a modifier", list(dict_items.keys()), key=f"sel_mod_{table_name}")
+                    chosen_item = st.selectbox(
+                        "Sélectionner l'élément à modifier",
+                        list(dict_items.keys()), key=f"sel_mod_{table_name}"
+                    )
                     id_m = dict_items[chosen_item]
-                    curr = fetch_one(f"SELECT nom, nui, rccm, telephone, bp FROM {table_name} WHERE id=%s", (id_m,))
-
+                    curr = fetch_one(
+                        f"SELECT nom, nui, rccm, telephone, bp FROM {table_name} WHERE id=%s",
+                        (id_m,)
+                    )
                     with st.form(f"form_mod_{table_name}"):
                         m_nom = st.text_input("Nom", value=curr[0] if curr else "")
                         m_nui = st.text_input("NUI", value=curr[1] if curr else "")
@@ -7039,7 +7347,8 @@ elif choix == "🏗️ Prestataires & Transitaires":
                         if st.form_submit_button("Appliquer les modifications"):
                             with conn.cursor() as cur:
                                 cur.execute(
-                                    f"UPDATE {table_name} SET nom=%s, nui=%s, rccm=%s, telephone=%s, bp=%s WHERE id=%s",
+                                    f"UPDATE {table_name} SET nom=%s, nui=%s, rccm=%s, "
+                                    f"telephone=%s, bp=%s WHERE id=%s",
                                     (m_nom, m_nui, m_rccm, m_tel, m_bp, id_m)
                                 )
                                 conn.commit()
@@ -7052,7 +7361,10 @@ elif choix == "🏗️ Prestataires & Transitaires":
             with sub3:
                 if items:
                     dict_del = {f"{i[1]} (ID: {i[0]})": i[0] for i in items}
-                    chosen_del = st.selectbox("Selectionner l'element a supprimer", list(dict_del.keys()), key=f"sel_del_{table_name}")
+                    chosen_del = st.selectbox(
+                        "Sélectionner l'élément à supprimer",
+                        list(dict_del.keys()), key=f"sel_del_{table_name}"
+                    )
                     id_d = dict_del[chosen_del]
                     if st.button("❌ Supprimer", type="primary", key=f"btn_del_{table_name}"):
                         with conn.cursor() as cur:
@@ -7065,12 +7377,408 @@ elif choix == "🏗️ Prestataires & Transitaires":
                     st.info("Aucune donnée à supprimer.")
 
             st.divider()
-            # Affichage du tableau avec un curseur local
-            df_res = get_dataframe_from_query(f"SELECT id, nom as Nom, nui as NUI, rccm as RCCM, telephone as Tel, bp as BP FROM {table_name}")
+            df_res = get_dataframe_from_query(
+                f"SELECT id, nom as Nom, nui as NUI, rccm as RCCM, "
+                f"telephone as Tel, bp as BP FROM {table_name}"
+            )
             st.dataframe(df_res, use_container_width=True)
 
     gerer_p_t("prestataires", t1)
     gerer_p_t("transitaires", t2)
+
+    # ==================================================================
+    # TAB 3 : CONTRATS DE TRANSPORT
+    # ==================================================================
+    with t3:
+        st.markdown("### 📝 Contrats de Transport Routier (Modèle FCC / OHADA)")
+        st.caption(
+            "Générez un contrat de transport routier de marchandises conforme à "
+            "l'Acte uniforme OHADA du 22 mars 2003 — utilisable pour tous vos "
+            "transporteurs."
+        )
+
+        sub_create, sub_list = st.tabs([
+            "➕ Nouveau contrat",
+            "📋 Suivi & téléchargement"
+        ])
+
+        # ------------------------------------------------------------------
+        # SOUS-ONGLET 1 : CRÉATION D'UN CONTRAT
+        # ------------------------------------------------------------------
+        with sub_create:
+            prestataires_dispo = fetch_all(
+                "SELECT id, nom, telephone, nui FROM prestataires ORDER BY nom"
+            )
+
+            if not prestataires_dispo:
+                st.warning(
+                    "⚠️ Aucun prestataire/transporteur enregistré. "
+                    "Ajoutez-en d'abord dans l'onglet **🏢 Prestataires**."
+                )
+            else:
+                dict_prestataires = {f"{p[1]} (ID: {p[0]})": p for p in prestataires_dispo}
+
+                # --- Numéro de contrat auto ---
+                try:
+                    year = datetime.now().year
+                    row = fetch_one("SELECT COALESCE(MAX(id), 0) + 1 FROM contrats_transport")
+                    next_num = row[0] if row else 1
+                    num_contrat_auto = f"TRANSF/FCC/{year}/{next_num:03d}"
+                except Exception:
+                    num_contrat_auto = f"TRANSF/FCC/{datetime.now().year}/001"
+
+                # --- En-tête ---
+                col_info1, col_info2, col_info3 = st.columns(3)
+                with col_info1:
+                    st.text_input("📋 N° Contrat (auto)", value=num_contrat_auto,
+                                  disabled=True, key="tc_num")
+                with col_info2:
+                    date_signature = st.date_input("📅 Date de signature",
+                                                   value=date.today(), key="tc_date")
+                with col_info3:
+                    lieu_signature = st.text_input("📍 Lieu de signature",
+                                                   value="Douala", key="tc_lieu")
+
+                # --- Transporteur ---
+                prestataire_choisi = st.selectbox(
+                    "🚛 Transporteur (prestataire) *",
+                    list(dict_prestataires.keys()),
+                    key="tc_prestataire"
+                )
+                infos_p = dict_prestataires[prestataire_choisi]
+                id_prestataire = infos_p[0]
+                prestataire_nom = infos_p[1]
+                prestataire_tel = infos_p[2] or "N/A"
+                prestataire_nui = infos_p[3] or "N/A"
+
+                st.info(
+                    f"🚛 **{prestataire_nom}** — Tél : {prestataire_tel} — NUI : {prestataire_nui}"
+                )
+
+                transporteur_cni = st.text_input(
+                    "🆔 CNI du transporteur (optionnel)",
+                    placeholder="Ex: 20200226100510884",
+                    key="tc_cni"
+                )
+
+                termes_paiement = st.text_area(
+                    "💳 Termes de paiement *",
+                    value="70 % au chargement, 30 % après déchargement au lieu de la livraison.",
+                    height=70,
+                    key="tc_termes"
+                )
+
+                st.divider()
+                st.markdown("### 🗺️ Lignes de transport (points de prise en charge)")
+
+                nb_lignes = st.number_input(
+                    "Nombre de lignes de transport",
+                    min_value=1, max_value=20, value=1, step=1,
+                    key="tc_nb_lignes"
+                )
+
+                lignes_data = []
+                for i in range(int(nb_lignes)):
+                    with st.expander(f"🚚 Ligne {i+1}", expanded=(i == 0)):
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            marchandise = st.text_input(
+                                "Marchandise",
+                                value="Fèves de Cacao",
+                                key=f"tc_march_{i}"
+                            )
+                            lieu_prise = st.text_input(
+                                "Lieu de prise en charge",
+                                value="",
+                                placeholder="Ex: OBALA",
+                                key=f"tc_lieu_prise_{i}"
+                            )
+                        with c2:
+                            colis = st.text_input(
+                                "Colis / poids net",
+                                placeholder="Ex: 35 TONNES",
+                                key=f"tc_colis_{i}"
+                            )
+                            prix_tonne = st.number_input(
+                                "Prix (FCFA/Tonne)",
+                                min_value=0.0, step=500.0, value=0.0,
+                                key=f"tc_prix_{i}"
+                            )
+                        with c3:
+                            destinataire = st.text_input(
+                                "Destinataire",
+                                value="FRIENDS CAMEROON COMMODITIES (FCC)",
+                                key=f"tc_dest_{i}"
+                            )
+                            lieu_livraison = st.text_input(
+                                "Lieu de livraison",
+                                value="NEALIKO PAD",
+                                key=f"tc_livr_{i}"
+                            )
+
+                        valeur_declaree = st.text_input(
+                            "Valeur déclarée",
+                            value="Cf. Lettre de voiture",
+                            key=f"tc_valeur_{i}"
+                        )
+
+                        lignes_data.append({
+                            "marchandise": marchandise,
+                            "lieu_prise_en_charge": lieu_prise,
+                            "colis_poids_net": colis,
+                            "prix_par_tonne": prix_tonne,
+                            "destinataire": destinataire,
+                            "lieu_livraison": lieu_livraison,
+                            "valeur_declaree": valeur_declaree,
+                        })
+
+                st.divider()
+
+                # --- Calcul du montant estimé ---
+                montant_estime = 0.0
+                for l in lignes_data:
+                    try:
+                        import re as _re
+                        m = _re.search(r'(\d+(?:[\.,]\d+)?)', str(l['colis_poids_net']))
+                        if m:
+                            tonnage = float(m.group(1).replace(',', '.'))
+                            montant_estime += tonnage * float(l['prix_par_tonne'])
+                    except Exception:
+                        pass
+
+                col_btn1, col_btn2 = st.columns(2)
+
+                with col_btn1:
+                    if st.button("💾 Enregistrer le contrat",
+                                 use_container_width=True, type="primary"):
+                        if not termes_paiement.strip():
+                            st.error("❌ Les termes de paiement sont obligatoires.")
+                        else:
+                            try:
+                                cni_final = transporteur_cni.strip() or "N/A"
+                                with conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO contrats_transport
+                                        (numero_contrat, id_prestataire, date_signature,
+                                         lieu_signature, statut, termes_paiement, created_by)
+                                        VALUES (%s, %s, %s, %s, 'EN_ATTENTE', %s, %s)
+                                        RETURNING id
+                                    """, (
+                                        num_contrat_auto, id_prestataire,
+                                        date_signature.strftime('%Y-%m-%d'),
+                                        lieu_signature, termes_paiement,
+                                        st.session_state.get('username', 'Agent')
+                                    ))
+                                    id_contrat = cur.fetchone()[0]
+
+                                    for ligne in lignes_data:
+                                        cur.execute("""
+                                            INSERT INTO contrats_transport_lignes
+                                            (id_contrat, marchandise, lieu_prise_en_charge,
+                                             colis_poids_net, prix_par_tonne, destinataire,
+                                             lieu_livraison, valeur_declaree)
+                                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                        """, (
+                                            id_contrat,
+                                            ligne['marchandise'],
+                                            ligne['lieu_prise_en_charge'],
+                                            ligne['colis_poids_net'],
+                                            ligne['prix_par_tonne'],
+                                            ligne['destinataire'],
+                                            ligne['lieu_livraison'],
+                                            ligne['valeur_declaree']
+                                        ))
+
+                                    cur.execute("""
+                                        INSERT INTO documents_generes
+                                        (type_doc, reference, montant, demandeur,
+                                         description, statut)
+                                        VALUES ('contrat_transport', %s, %s, %s, %s, 'EN_ATTENTE')
+                                    """, (
+                                        num_contrat_auto,
+                                        montant_estime,
+                                        st.session_state.get('username', 'Agent'),
+                                        f"Contrat transport avec {prestataire_nom} — "
+                                        f"{len(lignes_data)} ligne(s) — Estimation {montant_estime:,.0f} FCFA"
+                                    ))
+                                    conn.commit()
+
+                                log_action(
+                                    f"Création contrat transport {num_contrat_auto} "
+                                    f"avec {prestataire_nom}"
+                                )
+                                st.success(
+                                    f"✅ Contrat **{num_contrat_auto}** créé et transmis "
+                                    f"à la Direction pour validation."
+                                )
+                                st.balloons()
+                                st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"❌ Erreur lors de l'enregistrement : {e}")
+
+                with col_btn2:
+                    if st.button("👁️ Aperçu PDF (avant validation)",
+                                 use_container_width=True):
+                        data_pdf = {
+                            "num": num_contrat_auto,
+                            "date_signature": date_signature.strftime('%d/%m/%Y'),
+                            "lieu_signature": lieu_signature,
+                            "termes_paiement": termes_paiement,
+                            "transporteur_nom": prestataire_nom,
+                            "transporteur_cni": transporteur_cni.strip() or "N/A",
+                            "transporteur_nui": prestataire_nui,
+                            "transporteur_telephone": prestataire_tel,
+                        }
+                        try:
+                            pdf_bytes = generer_contrat_transport_pdf(data_pdf, lignes_data)
+                            st.success("✅ Aperçu généré !")
+                            st.download_button(
+                                "📥 Télécharger l'aperçu PDF",
+                                data=pdf_bytes,
+                                file_name=f"{num_contrat_auto.replace('/', '_')}_apercu.pdf",
+                                mime="application/pdf",
+                                use_container_width=True,
+                                key="tc_apercu_dl"
+                            )
+                        except Exception as e:
+                            st.error(f"❌ Erreur de génération PDF : {e}")
+
+        # ------------------------------------------------------------------
+        # SOUS-ONGLET 2 : SUIVI & TÉLÉCHARGEMENT
+        # ------------------------------------------------------------------
+        with sub_list:
+            st.markdown("### 📋 Contrats de transport existants")
+
+            df_contrats = get_dataframe_from_query("""
+                SELECT
+                    ct.id,
+                    ct.numero_contrat          AS "N° Contrat",
+                    p.nom                       AS "Transporteur",
+                    ct.date_signature           AS "Date Signature",
+                    ct.lieu_signature           AS "Lieu",
+                    ct.statut                   AS "Statut",
+                    ct.signataire               AS "Signataire",
+                    COUNT(ctl.id)               AS "Nb Lignes"
+                FROM contrats_transport ct
+                LEFT JOIN prestataires p ON ct.id_prestataire = p.id
+                LEFT JOIN contrats_transport_lignes ctl ON ctl.id_contrat = ct.id
+                GROUP BY ct.id, p.nom
+                ORDER BY ct.id DESC
+            """)
+
+            if df_contrats.empty:
+                st.info("ℹ️ Aucun contrat de transport enregistré.")
+            else:
+                k1, k2, k3 = st.columns(3)
+                k1.metric("📋 Total contrats", len(df_contrats))
+                k2.metric("✅ Validés",
+                          len(df_contrats[df_contrats['Statut'] == 'VALIDE']))
+                k3.metric("⏳ En attente",
+                          len(df_contrats[df_contrats['Statut'] == 'EN_ATTENTE']))
+
+                st.dataframe(df_contrats, use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 🖨️ Télécharger un contrat")
+
+                dict_contrats = {
+                    f"{row['N° Contrat']} — {row['Transporteur']} ({row['Statut']})": row['id']
+                    for _, row in df_contrats.iterrows()
+                }
+
+                choix_contrat = st.selectbox(
+                    "Sélectionner le contrat :",
+                    list(dict_contrats.keys()),
+                    key="tc_download_select"
+                )
+                id_contrat_sel = dict_contrats[choix_contrat]
+
+                if st.button("📄 Générer le PDF",
+                             type="primary",
+                             use_container_width=True,
+                             key="tc_gen_pdf_btn"):
+                    # --- Fetch header ---
+                    row_c = fetch_one("""
+                        SELECT ct.numero_contrat, ct.date_signature,
+                               ct.lieu_signature, ct.statut,
+                               ct.termes_paiement, ct.signataire,
+                               p.nom, p.telephone, p.nui
+                        FROM contrats_transport ct
+                        LEFT JOIN prestataires p ON ct.id_prestataire = p.id
+                        WHERE ct.id = %s
+                    """, (id_contrat_sel,))
+
+                    if not row_c:
+                        st.error("❌ Contrat introuvable.")
+                    else:
+                        # --- Fetch lignes ---
+                        rows_lignes = fetch_all("""
+                            SELECT marchandise, lieu_prise_en_charge, colis_poids_net,
+                                   prix_par_tonne, destinataire, lieu_livraison, valeur_declaree
+                            FROM contrats_transport_lignes
+                            WHERE id_contrat = %s
+                            ORDER BY id
+                        """, (id_contrat_sel,))
+
+                        lignes_pdf = [
+                            {
+                                "marchandise": rl[0],
+                                "lieu_prise_en_charge": rl[1],
+                                "colis_poids_net": rl[2],
+                                "prix_par_tonne": float(rl[3] or 0),
+                                "destinataire": rl[4],
+                                "lieu_livraison": rl[5],
+                                "valeur_declaree": rl[6],
+                            }
+                            for rl in rows_lignes
+                        ]
+
+                        # --- Cachet ---
+                        cachet = None
+                        if row_c[5]:
+                            res_c = fetch_one(
+                                "SELECT fichier_cachet FROM cachets_direction "
+                                "WHERE role_signataire = %s",
+                                (row_c[5],)
+                            )
+                            if res_c:
+                                cachet = res_c[0]
+
+                        # --- Format date ---
+                        date_sig_str = ""
+                        if row_c[1]:
+                            if hasattr(row_c[1], 'strftime'):
+                                date_sig_str = row_c[1].strftime('%d/%m/%Y')
+                            else:
+                                date_sig_str = str(row_c[1])
+
+                        data_pdf = {
+                            "num": row_c[0],
+                            "date_signature": date_sig_str,
+                            "lieu_signature": row_c[2] or "Douala",
+                            "termes_paiement": row_c[4] or "",
+                            "transporteur_nom": row_c[6] or "N/A",
+                            "transporteur_cni": "N/A",
+                            "transporteur_nui": row_c[8] or "N/A",
+                            "transporteur_telephone": row_c[7] or "N/A",
+                        }
+
+                        try:
+                            pdf_bytes = generer_contrat_transport_pdf(
+                                data_pdf, lignes_pdf, cachet_blob=cachet
+                            )
+                            st.success("✅ Contrat généré !")
+                            st.download_button(
+                                "📥 Télécharger le contrat PDF",
+                                data=pdf_bytes,
+                                file_name=f"{row_c[0].replace('/', '_')}.pdf",
+                                mime="application/pdf",
+                                use_container_width=True,
+                                key=f"tc_dl_{id_contrat_sel}"
+                            )
+                        except Exception as e:
+                            st.error(f"❌ Erreur de génération : {e}")
     
 elif choix == "📦 Mouvements de Stock":
     
@@ -10427,7 +11135,8 @@ elif choix == "👑 Espace Direction":
                 'bon_caisse': ('💵', 'Bon de Caisse (Acompte)'),
                 'engagement_dette': ('📝', 'Engagement de Dette'),
                 'facture_vente': ('🧾', 'Facture de Vente'),
-                'reglement_dette': ('💳', 'Règlement de Dette')
+                'reglement_dette': ('💳', 'Règlement de Dette'),
+                'contrat_transport': ('🚛', 'Contrat Transport')
             }
 
             for row in df_attente.to_dict('records'):
@@ -10532,6 +11241,56 @@ elif choix == "👑 Espace Direction":
                                             data_p['code_verification'] = row['code_verification']
                                         res = generer_bon_paiement_pdf(data_p, type_document=doc_type)
                                         pdf_bytes = res[1] if isinstance(res, tuple) else res
+
+                            elif doc_type == 'contrat_transport':
+                                row_c = fetch_one("""
+                                    SELECT ct.numero_contrat, ct.date_signature, ct.lieu_signature,
+                                           ct.termes_paiement, ct.signataire,
+                                           p.nom, p.telephone, p.nui
+                                    FROM contrats_transport ct
+                                    LEFT JOIN prestataires p ON ct.id_prestataire = p.id
+                                    WHERE ct.numero_contrat = %s
+                                """, (doc_ref,))
+                                if row_c:
+                                    rows_lignes = fetch_all("""
+                                        SELECT marchandise, lieu_prise_en_charge, colis_poids_net,
+                                               prix_par_tonne, destinataire, lieu_livraison, valeur_declaree
+                                        FROM contrats_transport_lignes ctl
+                                        JOIN contrats_transport ct ON ctl.id_contrat = ct.id
+                                        WHERE ct.numero_contrat = %s
+                                        ORDER BY ctl.id
+                                    """, (doc_ref,))
+                                    lignes_pdf = [
+                                        {
+                                            "marchandise": rl[0], "lieu_prise_en_charge": rl[1],
+                                            "colis_poids_net": rl[2],
+                                            "prix_par_tonne": float(rl[3] or 0),
+                                            "destinataire": rl[4], "lieu_livraison": rl[5],
+                                            "valeur_declaree": rl[6],
+                                        } for rl in rows_lignes
+                                    ]
+                                    date_sig = row_c[1].strftime('%d/%m/%Y') if hasattr(row_c[1], 'strftime') else str(row_c[1] or '')
+                                    data_pdf = {
+                                        "num": row_c[0],
+                                        "date_signature": date_sig,
+                                        "lieu_signature": row_c[2] or "Douala",
+                                        "termes_paiement": row_c[3] or "",
+                                        "transporteur_nom": row_c[5] or "N/A",
+                                        "transporteur_cni": "N/A",
+                                        "transporteur_nui": row_c[7] or "N/A",
+                                        "transporteur_telephone": row_c[6] or "N/A",
+                                    }
+                                    pdf_bytes = generer_contrat_transport_pdf(
+                                        data_pdf, lignes_pdf, cachet_blob=cachet_blob
+                                    )
+                                    # Mise à jour statut
+                                    with conn.cursor() as cur:
+                                        cur.execute(
+                                            "UPDATE contrats_transport SET statut='VALIDE', signataire=%s "
+                                            "WHERE numero_contrat=%s",
+                                            (role_signataire, row_c[0])
+                                        )
+                                        conn.commit()
                             # CAS 3 : FACTURE DE VENTE
                             elif doc_type == 'facture_vente':
                                 match = re.search(r"INV-(\d+)", doc_ref)
