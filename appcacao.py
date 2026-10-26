@@ -2436,172 +2436,376 @@ class BordereauLivraisonPDF(FPDF):
         self.set_text_color(148, 163, 184)
         self.cell(0, 10, _clean_text("Document généré automatiquement — Friends Cameroon Commodities"), align="C")
 
-# =========================================================
+
 class ContratTransportPDF(FPDF):
     def footer(self):
-        self.set_y(-20)
-        if os.path.exists("Footer-FCC.png"):
-            try:
-                self.image("Footer-FCC.png", x=10, y=self.get_y(), w=190)
-                return
-            except Exception:
-                pass
-        _set_font_safely(self, "I", 7)
-        self.set_text_color(120, 120, 120)
-        self.cell(0, 5, _clean_text("FRIENDS CAMEROON COMMODITIES - RCCM : CM-DLA-01-2024-B12-00270 - NIU : M032416606242H"), align="C")
+        # Pied de page discret, sans provoquer de nouvelle page
+        self.set_y(-10)
+        _set_font_safely(self, "", 6)
+        self.set_text_color(100, 100, 100)
+        self.cell(
+            0, 4,
+            _clean_text(
+                "FRIENDS CAMEROON COMMODITIES - RCCM : "
+                "CM-DLA-01-2024-B12-00270 - NIU : M032416606242H"
+            ),
+            align="C"
+        )
+
 
 def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
-    pdf = ContratTransportPDF(orientation='P', unit='mm', format='A4')
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=22)
-    pdf.set_margins(10, 10, 10)
+    from fpdf import FPDF
+    import os
+    import tempfile
+    import logging
 
-    # ----- 1. LOGO + TITRE -----
+    pdf = ContratTransportPDF("P", "mm", "A4")
+    pdf.set_margins(10, 8, 10)
+    pdf.set_auto_page_break(False)
+    pdf.add_page()
+
+    # ---------------------------------------------------------
+    # OUTILS DE MISE EN PAGE
+    # ---------------------------------------------------------
+    LARGEUR = 190
+    Y_LIMITE = 276
+
+    def police(style="", taille=7):
+        _set_font_safely(pdf, style, taille)
+
+    def texte(valeur):
+        return _clean_text(str(valeur if valeur is not None else ""))
+
+    def titre_article(titre, contenu):
+        """Titre d'article en gras, suivi de son texte compact."""
+        police("B", 6.7)
+        pdf.write(3.15, texte(titre) + " ")
+        police("", 6.7)
+        pdf.write(3.15, texte(contenu))
+        pdf.ln(3.5)
+
+    def nb_lignes(largeur, contenu):
+        """Estime le nombre de lignes nécessaires à une cellule."""
+        contenu = texte(contenu).replace("\n", " ")
+        if not contenu:
+            return 1
+
+        mots = contenu.split()
+        lignes_calculees = 1
+        courant = ""
+
+        for mot in mots:
+            essai = mot if not courant else courant + " " + mot
+            if pdf.get_string_width(essai) <= largeur - 2:
+                courant = essai
+            else:
+                lignes_calculees += 1
+                courant = mot
+
+        return lignes_calculees
+
+    def ligne_tableau(valeurs, largeurs, hauteur_ligne=3.1,
+                      fond=False, taille=5.8, gras=False):
+        """Dessine une ligne de tableau avec cellules de même hauteur."""
+        police("B" if gras else "", taille)
+
+        nombre = max(
+            nb_lignes(largeurs[i], valeurs[i])
+            for i in range(len(largeurs))
+        )
+        hauteur = max(5.0, nombre * hauteur_ligne + 1.5)
+
+        if pdf.get_y() + hauteur > Y_LIMITE:
+            # Ne jamais créer une deuxième page silencieusement.
+            raise ValueError(
+                "Le contrat dépasse une page A4. "
+                "Réduisez le nombre de lignes du tableau "
+                "ou raccourcissez les informations."
+            )
+
+        x_depart = 10
+        y_depart = pdf.get_y()
+
+        if fond:
+            pdf.set_fill_color(225, 225, 225)
+
+        for i, valeur in enumerate(valeurs):
+            x = x_depart + sum(largeurs[:i])
+            pdf.set_xy(x, y_depart)
+
+            pdf.multi_cell(
+                largeurs[i],
+                hauteur_ligne,
+                texte(valeur),
+                border=1,
+                align="C",
+                fill=fond
+            )
+
+        pdf.set_xy(10, y_depart + hauteur)
+
+    # ---------------------------------------------------------
+    # 1. LOGO ET EN-TÊTE FCC
+    # ---------------------------------------------------------
     try:
-        pdf.image("Logo-FCC.png", x=10, y=8, w=40)
-    except FileNotFoundError:
+        if os.path.exists("Logo-FCC.png"):
+            pdf.image("Logo-FCC.png", x=10, y=7, w=29)
+    except Exception:
         pass
 
-    pdf.set_xy(50, 10)
-    _set_font_safely(pdf, "B", 12)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(150, 6, "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES", ln=1, align="C")
+    pdf.set_xy(40, 8)
+    police("B", 10)
+    pdf.cell(
+        160, 5,
+        "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES",
+        align="C", ln=1
+    )
 
-    pdf.set_x(50)
-    _set_font_safely(pdf, "BI", 9)
-    pdf.cell(150, 5, _clean_text(f"Contrat n° {data_contrat.get('num', '')}"), ln=1, align="C")
+    pdf.set_x(40)
+    police("BI", 8)
+    pdf.cell(
+        160, 4.5,
+        texte(f"Contrat n° {data_contrat.get('num', '')}"),
+        align="C", ln=1
+    )
 
-    pdf.ln(1)
-    pdf.set_x(10)
-    _set_font_safely(pdf, "I", 7)
-    pdf.multi_cell(190, 3.5,
-        _clean_text("Régit par l'Acte uniforme OHADA du 22 mars 2003 relatif aux contrats "
-        "de transport de marchandises par route (« l'Acte uniforme »)"),
-        align="C")
+    pdf.set_x(40)
+    police("I", 6.1)
+    pdf.multi_cell(
+        160, 3.1,
+        texte(
+            "Régi par l'Acte uniforme OHADA du 22 mars 2003 "
+            "relatif aux contrats de transport de marchandises par route"
+        ),
+        align="C"
+    )
 
-    pdf.ln(2)
+    pdf.set_y(max(pdf.get_y(), 26))
     pdf.set_draw_color(0, 0, 0)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(2)
 
-    # ----- 2. PARTIES -----
-    entreprise_info = (
-        "FRIENDS CAMEROON COMMODITIES (FCC), SARL, RCCM n° [CM-DLA-01-2024-B12-00270], "
-        "NIU : [M032416606242H], siège social à Douala, représentée par le "
-        "Département Transport et Logistique, ci-après « le Donneur d'ordre » ;"
+    # ---------------------------------------------------------
+    # 2. PARTIES AU CONTRAT
+    # ---------------------------------------------------------
+    police("B", 6.7)
+    pdf.write(3.2, "ENTRE : ")
+    police("", 6.7)
+    pdf.write(
+        3.2,
+        texte(
+            "FRIENDS CAMEROON COMMODITIES (FCC), SARL, RCCM n° "
+            "CM-DLA-01-2024-B12-00270, NIU : M032416606242H, "
+            "siège social à Douala, représentée par le Département "
+            "Transport et Logistique, ci-après « le Donneur d'ordre » ;"
+        )
+    )
+    pdf.ln(3.6)
+
+    transporteur = data_contrat.get("transporteur_nom", "N/A")
+    cni = data_contrat.get("transporteur_cni", "N/A")
+    nui = data_contrat.get("transporteur_nui", "N/A")
+    telephone = data_contrat.get("transporteur_telephone", "N/A")
+
+    police("B", 6.7)
+    pdf.write(3.2, "ET : ")
+    police("", 6.7)
+    pdf.write(
+        3.2,
+        texte(
+            f"M./Mme {transporteur}, CNI : {cni}, NUI : {nui}, "
+            f"Téléphone : {telephone}, ci-après « le Transporteur »."
+        )
+    )
+    pdf.ln(4)
+
+    # ---------------------------------------------------------
+    # 3. OBJET ET TABLEAU — COMME DANS LE MODÈLE FCC
+    # Le tableau est placé après l'article 2, pas à la fin.
+    # ---------------------------------------------------------
+    titre_article(
+        "Article 1 - Objet.",
+        "Le Transporteur s'engage à acheminer par route les marchandises "
+        "du lieu de prise en charge au lieu de livraison convenu. "
+        "Une lettre de voiture constate le transport."
     )
 
-    _set_font_safely(pdf, "B", 8.5)
-    pdf.write(4, "ENTRE : ")
-    _set_font_safely(pdf, "", 8.5)
-    pdf.write(4, _clean_text(entreprise_info))
-    pdf.ln(5)
+    titre_article(
+        "Article 2 - Désignation du transport.",
+        "Les marchandises, lieux et conditions sont détaillés ci-dessous."
+    )
 
-    transporteur_nom = data_contrat.get('transporteur_nom', 'N/A')
-    transporteur_cni = data_contrat.get('transporteur_cni', 'N/A')
-    transporteur_nui = data_contrat.get('transporteur_nui', 'N/A')
-    transporteur_tel = data_contrat.get('transporteur_telephone', 'N/A')
+    pdf.ln(0.5)
+    police("B", 7.1)
+    pdf.cell(190, 4, "Tableau récapitulatif du transport :", ln=1)
+    pdf.ln(0.5)
 
-    _set_font_safely(pdf, "B", 8.5)
-    pdf.write(4, "ET : ")
-    _set_font_safely(pdf, "", 8.5)
-    pdf.write(4, _clean_text(
-        f"M./Mme {transporteur_nom}, CNI : [{transporteur_cni}], "
-        f"NUI : [{transporteur_nui}], Téléphone : [{transporteur_tel}], "
-        f"ci-après « le Transporteur »."
-    ))
-    pdf.ln(6)
-
-    # ----- 3. ARTICLES -----
-    articles = [
-        ("Article 1 - Objet.", "Le Transporteur s'engage, moyennant prix, à déplacer par route les marchandises remises par le Donneur d'ordre (l'expéditeur), du lieu de prise en charge au lieu de livraison indiqués ci-dessous. Le contrat est constaté par une lettre de voiture établie en un original (remis à l'expéditeur) et au moins deux copies (l'une conservée par le Transporteur, l'autre accompagnant la marchandise)."),
-        ("Article 2 - Désignation du transport.", "Le transport porte sur les marchandises, lieux et conditions détaillés dans le tableau ci-dessous."),
-        ("Article 3 - Obligations du Transporteur.", "Il fournit un véhicule en bon état, adapté à la marchandise ; vérifie à la prise en charge le nombre de colis, leurs marques et numéros ainsi que l'état apparent de la marchandise et de son emballage, et inscrit ses réserves motivées sur la lettre de voiture ; livre la marchandise au destinataire, contre décharge et dans le délai convenu, après l'avoir avisé de son arrivée ; avise sans délai l'ayant droit de tout empêchement au transport ou à la livraison et lui demande des instructions."),
-        ("Article 4 - Obligations du Donneur d'ordre.", "Il emballe la marchandise de manière adéquate ; fournit exactement les informations, instructions et documents nécessaires ; déclare au préalable la nature et la valeur des documents, espèces ou marchandises de grande valeur, que le Transporteur n'est pas tenu de transporter ; et ne remet aucune marchandise dangereuse. Il répond du préjudice causé par un défaut d'emballage, un vice propre de la marchandise, ou l'omission, l'insuffisance ou l'inexactitude de ses déclarations."),
-        ("Article 5 - Termes de paiement.", f"Le prix du transport est payable par le Donneur d'ordre de la manière suivante : {data_contrat.get('termes_paiement', '70 % au chargement, 30 % après déchargement au lieu de la livraison.')}"),
-        ("Article 6 - Responsabilité et assurance.", "Le Transporteur répond de l'avarie, de la perte totale ou partielle et du retard survenus entre la prise en charge et la livraison, sauf exonération prouvée dans les cas prévus à l'article 17 de l'Acte uniforme (faute ou ordre de l'ayant droit, vice propre de la marchandise, circonstances inévitables et irrémédiables, risques particuliers prévus par la loi). L'indemnité est calculée d'après la valeur de la marchandise et ne peut excéder 5 000 FCFA par kilogramme de poids brut, ou le montant de la valeur déclarée à la lettre de voiture ; en cas de retard, elle ne peut excéder le prix du transport. Elle porte intérêt à 5 % l'an à compter de la réclamation écrite. Toute stipulation contraire à l'Acte uniforme est nulle. Le Transporteur justifie d'une assurance de responsabilité civile ; le Donneur d'ordre peut assurer sa marchandise, sans que le Transporteur puisse se faire céder le bénéfice de cette assurance."),
-        ("Article 7 - Réserves, réclamations et prescription.", "La livraison est constatée par un bon de déchargement ou de réception signé par le destinataire, indiquant le tonnage reçu et les éventuelles réserves. Le destinataire adresse au Transporteur un avis écrit précisant la nature des pertes : au plus tard le premier jour ouvrable suivant la livraison si elles sont apparentes ; dans les sept jours de la livraison, dimanches et jours fériés non compris, si elles ne le sont pas ; et, pour obtenir une indemnité de retard, dans les vingt et un jours de l'avis d'arrivée. À défaut, la marchandise est présumée reçue dans l'état décrit à la lettre de voiture. Toute action est subordonnée à une réclamation écrite adressée au Transporteur au plus tard 60 jours après la livraison (ou six mois après la prise en charge à défaut de livraison) et se prescrit par un an à compter de la livraison (trois ans en cas de dol ou de faute équivalente)."),
-        ("Article 8 - Durée et résiliation.", "Le contrat prend effet à la signature pour ce transport unique. En cas de manquement grave non réparé huit (8) jours après mise en demeure par lettre recommandée, l'autre partie peut le résilier de plein droit, sans préjudice de ses droits à réparation."),
-        ("Article 9 - Confidentialité.", "Les parties s'interdisent de divulguer les informations commerciales échangées à l'occasion du présent contrat."),
-        ("Article 10 - Droit applicable et litiges.", "Le contrat est régi par l'Acte uniforme et, pour ce qu'il ne règle pas, par le droit camerounais. Les parties recherchent d'abord une solution amiable ; à défaut, tout litige est soumis à la juridiction compétente de Douala, conformément aux articles 26 et 27 de l'Acte uniforme."),
+    largeurs = [27, 27, 22, 25, 29, 32, 28]
+    entetes = [
+        "Marchandise",
+        "Prise en charge",
+        "Colis / Poids",
+        "Prix (FCFA/T)",
+        "Destinataire",
+        "Livraison",
+        "Valeur déclarée"
     ]
 
-    for titre, contenu in articles:
-        pdf.set_x(10)
-        _set_font_safely(pdf, "B", 8.5)
-        pdf.write(4, _clean_text(titre) + " ")
-        _set_font_safely(pdf, "", 8.5)
-        pdf.multi_cell(0, 4, _clean_text(contenu)) # 0 = prend toute la largeur dispo
-        pdf.ln(1)
+    ligne_tableau(
+        entetes, largeurs,
+        hauteur_ligne=3.0,
+        fond=True, taille=5.5, gras=True
+    )
+
+    for ligne in lignes:
+        prix = float(ligne.get("prix_par_tonne", 0) or 0)
+
+        poids = ligne.get("colis_poids_net", "")
+        if isinstance(poids, (int, float)):
+            poids = f"{poids:,.0f} kg"
+
+        valeurs = [
+            ligne.get("marchandise", "Fèves de cacao"),
+            ligne.get("lieu_prise_en_charge", ""),
+            poids,
+            f"{prix:,.0f}",
+            ligne.get("destinataire", "FCC"),
+            ligne.get("lieu_livraison", ""),
+            ligne.get("valeur_declaree", "Cf. lettre de voiture")
+        ]
+
+        ligne_tableau(
+            valeurs, largeurs,
+            hauteur_ligne=3.0,
+            taille=5.6
+        )
 
     pdf.ln(2)
 
-    # ----- 4. TABLEAU DE DÉSIGNATION -----
-    pdf.set_x(10)
-    _set_font_safely(pdf, "B", 9)
-    pdf.cell(0, 5, "Tableau récapitulatif du transport :", ln=1)
+    # ---------------------------------------------------------
+    # 4. ARTICLES CONTRACTUELS
+    # Version condensée pour conserver une page A4.
+    # ---------------------------------------------------------
+    articles = [
+        (
+            "Article 3 - Obligations du Transporteur.",
+            "Fournir un véhicule adapté et en bon état, vérifier la "
+            "marchandise à la prise en charge, noter ses réserves, "
+            "livrer contre décharge et signaler tout empêchement."
+        ),
+        (
+            "Article 4 - Obligations du Donneur d'ordre.",
+            "Fournir un emballage adapté, les informations et documents "
+            "nécessaires, et déclarer la nature et la valeur des "
+            "marchandises particulières. Il répond des préjudices "
+            "liés à ses déclarations ou à l'emballage."
+        ),
+        (
+            "Article 5 - Termes de paiement.",
+            data_contrat.get(
+                "termes_paiement",
+                "70 % au chargement et 30 % après déchargement "
+                "au lieu de livraison."
+            )
+        ),
+        (
+            "Article 6 - Responsabilité et assurance.",
+            "Le Transporteur répond des pertes, avaries et retards "
+            "selon l'Acte uniforme OHADA et ses causes d'exonération. "
+            "Les limites d'indemnisation et les assurances applicables "
+            "sont celles prévues par les textes en vigueur."
+        ),
+        (
+            "Article 7 - Réserves et réclamations.",
+            "La réception est constatée par un bon signé indiquant "
+            "le tonnage reçu et les réserves éventuelles. Les avis, "
+            "réclamations et délais de prescription sont régis "
+            "par l'Acte uniforme applicable."
+        ),
+        (
+            "Article 8 - Durée et résiliation.",
+            "Le contrat vaut pour le transport désigné. En cas de "
+            "manquement grave non réparé dans les huit jours suivant "
+            "une mise en demeure, l'autre partie peut le résilier."
+        ),
+        (
+            "Article 9 - Confidentialité.",
+            "Les parties s'interdisent de divulguer les informations "
+            "commerciales échangées dans le cadre du présent contrat."
+        ),
+        (
+            "Article 10 - Droit applicable et litiges.",
+            "Le contrat est régi par l'Acte uniforme OHADA et, pour "
+            "ce qu'il ne règle pas, par le droit camerounais. À défaut "
+            "d'accord amiable, le litige est porté devant la juridiction "
+            "compétente conformément aux textes applicables."
+        ),
+    ]
+
+    for titre, contenu in articles:
+        titre_article(titre, contenu)
+
+    # ---------------------------------------------------------
+    # 5. LIEU, DATE ET SIGNATURES
+    # ---------------------------------------------------------
     pdf.ln(1)
 
-    # Ajustement des largeurs pour éviter les débordements
-    col_widths = [22, 25, 20, 28, 35, 30, 30] 
-    headers = ["Marchandise", "Prise en charge", "Colis/\nPoids", "Prix\n(FCFA/T)", "Destinataire", "Livraison", "Valeur déclarée"]
+    date_signature = data_contrat.get("date_signature", "")
+    lieu_signature = data_contrat.get("lieu_signature", "Douala")
 
-    pdf.set_fill_color(230, 230, 230)
-    pdf.set_draw_color(0, 0, 0)
-    _set_font_safely(pdf, "B", 6.5) # Police plus petite
-    for i, h in enumerate(headers):
-        pdf.cell(col_widths[i], 7, _clean_text(h), border=1, fill=True, align="C")
-    pdf.ln()
+    police("B", 7)
+    pdf.multi_cell(
+        190, 4,
+        texte(
+            f"Fait à {lieu_signature}, le {date_signature}, "
+            "en deux (2) exemplaires originaux."
+        )
+    )
 
-    _set_font_safely(pdf, "", 6.5)
-    for ligne in lignes:
-        prix = float(ligne.get('prix_par_tonne', 0) or 0)
-        pdf.cell(col_widths[0], 6, _clean_text(str(ligne.get('marchandise', ''))), border=1, align="C")
-        pdf.cell(col_widths[1], 6, _clean_text(str(ligne.get('lieu_prise_en_charge', ''))), border=1, align="C")
-        pdf.cell(col_widths[2], 6, _clean_text(str(ligne.get('colis_poids_net', ''))), border=1, align="C")
-        pdf.cell(col_widths[3], 6, _clean_text(f"{prix:,.0f}"), border=1, align="C")
-        
-        # Raccourcir le nom si trop long
-        dest = str(ligne.get('destinataire', 'FCC'))
-        if len(dest) > 25: dest = "FCC"
-        pdf.cell(col_widths[4], 6, _clean_text(dest), border=1, align="C")
-        
-        pdf.cell(col_widths[5], 6, _clean_text(str(ligne.get('lieu_livraison', ''))), border=1, align="C")
-        pdf.cell(col_widths[6], 6, _clean_text(str(ligne.get('valeur_declaree', ''))), border=1, align="C")
-        pdf.ln()
+    y_sig = pdf.get_y() + 3
 
-    pdf.ln(4)
+    if y_sig + 22 > Y_LIMITE:
+        raise ValueError(
+            "Le contenu dépasse une page A4. "
+            "Réduisez le nombre de lignes du tableau."
+        )
 
-    # ----- 5. LIEU & DATE -----
-    pdf.set_x(10)
-    _set_font_safely(pdf, "B", 9)
-    pdf.cell(0, 5, _clean_text(
-             f"Fait à {data_contrat.get('lieu_signature', 'Douala')}, "
-             f"le {data_contrat.get('date_signature', '')}, "
-             f"en deux (2) exemplaires originaux."), ln=1)
-    pdf.ln(6)
-
-    # ----- 6. SIGNATURES -----
-    y_sig = pdf.get_y()
-
+    police("B", 7)
     pdf.set_xy(10, y_sig)
-    _set_font_safely(pdf, "B", 9)
-    pdf.multi_cell(90, 4.5, _clean_text("Le Donneur d'ordre\nDépartement Transport & Logistique - FCC"), align="C")
+    pdf.multi_cell(
+        90, 4,
+        "Le Donneur d'ordre\nDépartement Transport & Logistique - FCC",
+        align="C"
+    )
 
-    pdf.set_xy(100, y_sig)
-    pdf.multi_cell(90, 4.5, _clean_text("Le Transporteur"), align="C")
+    pdf.set_xy(105, y_sig)
+    pdf.multi_cell(85, 4, "Le Transporteur", align="C")
 
+    # Cachet FCC sous la signature du donneur d'ordre
     if cachet_blob:
+        tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix=".png"
+            ) as tmp:
                 tmp.write(cachet_blob)
                 tmp_path = tmp.name
-            pdf.image(tmp_path, x=30, y=y_sig + 14, w=40)
-            os.remove(tmp_path)
+
+            pdf.image(tmp_path, x=34, y=y_sig + 9, w=28)
+
         except Exception as e:
             logging.error(f"Erreur cachet contrat transport : {e}")
 
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    # Retourner les octets PDF pour le téléchargement Streamlit
     return bytes(pdf.output())
+
 
 def generer_bordereau_livraison_pdf(data_bl, filename=None):
     num_bl = data_bl.get('num_bl', 'BL-TEMP')
