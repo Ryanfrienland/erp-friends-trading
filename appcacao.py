@@ -320,53 +320,33 @@ def generer_qr_code(donnees: str, taille: int = 200) -> Image.Image:
     img = qr.make_image(fill_color="black", back_color="white")
     return img.resize((taille, taille))
 
-def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str) -> bytes:
-    """
-    Ajoute un QR code + texte de vérification en bas à droite de la DERNIÈRE page du PDF.
-    Le QR encode le code de vérification.
-    """
-    # Contenu encodé dans le QR
+def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str,
+                       x_qr: float = 470, y_qr: float = 115, largeur_qr: float = 70) -> bytes:
     contenu_qr = f"REF:{reference}|CODE:{code_verification}"
-    qr_img = generer_qr_code(contenu_qr, taille=120)  # taille réduite pour ne pas prendre trop de place
+    qr_img = generer_qr_code(contenu_qr, taille=120)
 
-    qr_buffer = BytesIO()
-    qr_img.save(qr_buffer, format="PNG")
-    qr_buffer.seek(0)
-
-    # Création d'un calque (overlay) avec reportlab
     overlay_buffer = BytesIO()
     c = canvas.Canvas(overlay_buffer, pagesize=A4)
-
-    # Position : bas à droite de la page (coordonnées en points, 1 point = 1/72 inch)
-    # A4 fait 595 x 842 points. On place le QR à x=450, y=80 (80 points depuis le bas)
-    x_qr = 470
-    y_qr = 115          # ← plus haut
-    largeur_qr = 70     # ← un peu plus petit
     c.drawImage(ImageReader(qr_img), x_qr, y_qr, width=largeur_qr, height=largeur_qr)
-
-    # Texte sous le QR code (pour référence)
     c.setFont("Helvetica", 6)
     c.drawString(x_qr - 5, y_qr - 10, f"Réf: {reference}")
     c.drawString(x_qr - 5, y_qr - 20, f"Code: {code_verification}")
     c.drawString(x_qr - 5, y_qr - 30, "Vérifiable dans l'ERP")
-
     c.save()
     overlay_buffer.seek(0)
 
-    # Fusion overlay + PDF original (dernière page uniquement)
     pdf_original = PdfReader(BytesIO(pdf_bytes))
     pdf_overlay = PdfReader(overlay_buffer)
     writer = PdfWriter()
-
     nb_pages = len(pdf_original.pages)
     for i, page in enumerate(pdf_original.pages):
-        if i == nb_pages - 1:  # dernière page uniquement
+        if i == nb_pages - 1:
             page.merge_page(pdf_overlay.pages[0])
         writer.add_page(page)
-
     resultat = BytesIO()
     writer.write(resultat)
     return resultat.getvalue()
+                           
 def convertir_df_csv(df):
     return df.to_csv(index=False).encode("utf-8")
 
@@ -2437,365 +2417,302 @@ class BordereauLivraisonPDF(FPDF):
         self.cell(0, 10, _clean_text("Document généré automatiquement — Friends Cameroon Commodities"), align="C")
 
 
-class ContratTransportPDF(FPDF):
-    def footer(self):
-        # Pied de page discret, sans provoquer de nouvelle page
-        self.set_y(-10)
-        _set_font_safely(self, "", 6)
-        self.set_text_color(100, 100, 100)
-        self.cell(
-            0, 4,
-            _clean_text(
-                "FRIENDS CAMEROON COMMODITIES - RCCM : "
-                "CM-DLA-01-2024-B12-00270 - NIU : M032416606242H"
-            ),
-            align="C"
-        )
+# ==========================================================================
+# CONTRAT DE TRANSPORT — MISE EN PAGE CALQUÉE SUR LE MODÈLE FCC (TRANSP/001)
+# ==========================================================================
+PREFIXE_CONTRAT_TRANSPORT = "TRANSF"   # mettez "TRANSP" si vous voulez suivre le modèle manuscrit
 
 
-def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
-    from fpdf import FPDF
-    import os
-    import tempfile
-    import logging
+def _tt(valeur):
+    """Nettoie un texte pour les polices FPDF 'core' (latin-1) en gardant « »."""
+    if valeur is None:
+        return ""
+    s = str(valeur)
+    for a, b in (
+        ("\u2014", "-"), ("\u2013", "-"), ("\u2012", "-"), ("\u2212", "-"),
+        ("\u2019", "'"), ("\u2018", "'"),
+        ("\u201C", "\u00AB"), ("\u201D", "\u00BB"),
+        ("\u2026", "..."), ("\u00A0", " "), ("\u202F", " "),
+        ("\u20AC", "EUR"), ("\u2022", "-"),
+    ):
+        s = s.replace(a, b)
+    s = re.sub(r"[\U00010000-\U0010FFFF]", "", s)
+    return s.encode("latin-1", "replace").decode("latin-1")
 
-    pdf = ContratTransportPDF("P", "mm", "A4")
-    pdf.set_margins(10, 8, 10)
+
+def _tm(valeur):
+    """Idem, mais neutralise les marqueurs markdown de FPDF (**, __, --)."""
+    return _tt(valeur).replace("**", "*").replace("__", "_").replace("--", "-")
+
+
+def _fmt_fr(nombre):
+    try:
+        return f"{float(nombre):,.0f}".replace(",", " ")
+    except (ValueError, TypeError):
+        return str(nombre)
+
+
+def _geometrie_transport():
+    """Géométrie commune au PDF et au placement du QR code (unités : mm / points)."""
+    mm = 72 / 25.4
+    fw, fh = 0.0, 0.0
+    if os.path.exists("Footer-FCC.png"):
+        try:
+            with Image.open("Footer-FCC.png") as im:
+                wpx, hpx = im.size
+            fw = 150.0
+            fh = fw * hpx / wpx
+            if fh > 20:
+                fh = 20.0
+                fw = fh * wpx / hpx
+        except Exception:
+            fw = fh = 0.0
+    bas = fh if fh else 6.0
+    footer_y = 297 - bas - 4
+    y_limit = footer_y - 3
+    sig_h = 32.0
+    return {
+        "footer_w": fw, "footer_h": fh, "footer_y": footer_y,
+        "y_limit": y_limit, "sig_h": sig_h, "sig_top": y_limit - sig_h,
+        # QR centré entre les deux signatures, calé juste au-dessus du pied de page
+        "qr_size_pt": 56,
+        "qr_x_pt": 105 * mm - 28,
+        "qr_y_pt": (297 - y_limit) * mm + 33,
+    }
+
+
+ARTICLES_TRANSPORT = [
+    ("Article 1 - Objet.",
+     "Le Transporteur s'engage, moyennant prix, à déplacer par route les marchandises remises par le "
+     "Donneur d'ordre (l'expéditeur), du lieu de prise en charge au lieu de livraison indiqués ci-dessous. "
+     "Le contrat est constaté par une lettre de voiture établie en un original (remis à l'expéditeur) et au "
+     "moins deux copies (l'une conservée par le Transporteur, l'autre accompagnant la marchandise). Ne sont "
+     "pas couverts par le présent modèle : les marchandises dangereuses, les transports funéraires et les "
+     "transports de déménagement."),
+    ("Article 2 - Désignation du transport.", None),   # le tableau est inséré ici
+    ("Article 3 - Obligations du Transporteur.",
+     "Il fournit un véhicule en bon état, adapté à la marchandise ; vérifie à la prise en charge le nombre de "
+     "colis, leurs marques et numéros ainsi que l'état apparent de la marchandise et de son emballage, et "
+     "inscrit ses réserves motivées sur la lettre de voiture ; livre la marchandise au destinataire, contre "
+     "décharge et dans le délai convenu, après l'avoir avisé de son arrivée ; avise sans délai l'ayant droit "
+     "de tout empêchement au transport ou à la livraison et lui demande des instructions."),
+    ("Article 4 - Obligations du Donneur d'ordre.",
+     "Il emballe la marchandise de manière adéquate ; fournit exactement les informations, instructions et "
+     "documents nécessaires (notamment douaniers) ; déclare au préalable la nature et la valeur des "
+     "documents, espèces ou marchandises de grande valeur, que le Transporteur n'est pas tenu de transporter ; "
+     "et ne remet aucune marchandise dangereuse. Il répond du préjudice causé par un défaut d'emballage, un "
+     "vice propre de la marchandise, ou l'omission, l'insuffisance ou l'inexactitude de ses déclarations."),
+    ("Article 5 - Prix et paiement.", "__PRIX__"),
+    ("Article 6 - Responsabilité et assurance.",
+     "Le Transporteur répond de l'avarie, de la perte totale ou partielle et du retard survenus entre la prise "
+     "en charge et la livraison, sauf exonération prouvée dans les cas prévus à l'article 17 de l'Acte uniforme "
+     "(faute ou ordre de l'ayant droit, vice propre de la marchandise, circonstances inévitables et "
+     "irrémédiables, risques particuliers prévus par la loi). L'indemnité est calculée d'après la valeur de la "
+     "marchandise et ne peut excéder 5 000 FCFA par kilogramme de poids brut, ou le montant de la valeur "
+     "déclarée à la lettre de voiture ; en cas de retard, elle ne peut excéder le prix du transport. Elle porte "
+     "intérêt à 5 % l'an à compter de la réclamation écrite. Toute stipulation contraire à l'Acte uniforme est "
+     "nulle. Le Transporteur justifie d'une assurance de responsabilité civile ; le Donneur d'ordre peut assurer "
+     "sa marchandise, sans que le Transporteur puisse se faire céder le bénéfice de cette assurance."),
+    ("Article 7 - Réserves, réclamations et prescription.",
+     "La livraison est constatée par un bon de déchargement ou de réception signé par le destinataire ou son "
+     "représentant habilité, indiquant le tonnage reçu et les éventuelles réserves. Le destinataire adresse au "
+     "Transporteur un avis écrit précisant la nature des pertes ou avaries : au plus tard le premier jour "
+     "ouvrable suivant la livraison si elles sont apparentes ; dans les sept jours de la livraison, dimanches et "
+     "jours fériés non compris, si elles ne le sont pas ; et, pour obtenir une indemnité de retard, dans les "
+     "vingt et un jours de l'avis d'arrivée. À défaut, la marchandise est présumée reçue dans l'état décrit à la "
+     "lettre de voiture. Toute action est subordonnée à une réclamation écrite adressée au Transporteur au plus "
+     "tard 60 jours après la livraison (ou six mois après la prise en charge à défaut de livraison) et se "
+     "prescrit par un an à compter de la livraison (trois ans en cas de dol ou de faute équivalente)."),
+    ("Article 8 - Durée et résiliation.",
+     "Le contrat prend effet à la signature pour ce transport unique. En cas de manquement grave non réparé "
+     "huit (8) jours après mise en demeure par lettre recommandée, l'autre partie peut le résilier de plein "
+     "droit, sans préjudice de ses droits à réparation."),
+    ("Article 9 - Confidentialité.",
+     "Les parties s'interdisent de divulguer les informations commerciales échangées à l'occasion du présent "
+     "contrat."),
+    ("Article 10 - Droit applicable et litiges.",
+     "Le contrat est régi par l'Acte uniforme et, pour ce qu'il ne règle pas, par le droit camerounais. Les "
+     "parties recherchent d'abord une solution amiable ; à défaut, tout litige est soumis à la juridiction "
+     "compétente de Douala, conformément aux articles 26 et 27 de l'Acte uniforme."),
+]
+
+
+def _rendre_contrat_transport(data_contrat, lignes, cachet_blob, fs, geo):
+    """Dessine le contrat à la taille de police `fs`. Retourne le PDF, ou None si ça dépasse 1 page."""
+    pdf = FPDF("P", "mm", "A4")
+    pdf.set_margins(12, 8, 12)
     pdf.set_auto_page_break(False)
     pdf.add_page()
 
-    # ---------------------------------------------------------
-    # OUTILS DE MISE EN PAGE
-    # ---------------------------------------------------------
-    LARGEUR = 190
-    Y_LIMITE = 276
+    LARG = 186
+    lh = round(fs * 0.43, 2)           # interligne
+    X0 = 12
 
-    def police(style="", taille=7):
-        _set_font_safely(pdf, style, taille)
-
-    def texte(valeur):
-        return _clean_text(str(valeur if valeur is not None else ""))
-
-    def titre_article(titre, contenu):
-        """Titre d'article en gras, suivi de son texte compact."""
-        police("B", 6.7)
-        pdf.write(3.15, texte(titre) + " ")
-        police("", 6.7)
-        pdf.write(3.15, texte(contenu))
-        pdf.ln(3.5)
-
-    def nb_lignes(largeur, contenu):
-        """Estime le nombre de lignes nécessaires à une cellule."""
-        contenu = texte(contenu).replace("\n", " ")
-        if not contenu:
+    def nb_l(largeur, contenu):
+        contenu = str(contenu).replace("\n", " ")
+        if not contenu.strip():
             return 1
-
-        mots = contenu.split()
-        lignes_calculees = 1
-        courant = ""
-
-        for mot in mots:
+        n, courant = 1, ""
+        for mot in contenu.split():
             essai = mot if not courant else courant + " " + mot
-            if pdf.get_string_width(essai) <= largeur - 2:
+            if pdf.get_string_width(essai) <= largeur:
                 courant = essai
             else:
-                lignes_calculees += 1
+                n += 1
                 courant = mot
+        return n
 
-        return lignes_calculees
+    def para(md, espace=1.1):
+        pdf.set_x(X0)
+        pdf.set_font("Times", "", fs)
+        pdf.multi_cell(LARG, lh, md, align="J", markdown=True)
+        pdf.ln(espace)
 
-    def ligne_tableau(valeurs, largeurs, hauteur_ligne=3.1,
-                      fond=False, taille=5.8, gras=False):
-        """Dessine une ligne de tableau avec cellules de même hauteur."""
-        police("B" if gras else "", taille)
+    # ---------------- EN-TÊTE ----------------
+    y_bas = 28.0
+    if os.path.exists("Logo-FCC.png"):
+        try:
+            with Image.open("Logo-FCC.png") as im:
+                wpx, hpx = im.size
+            lw = 34.0
+            pdf.image("Logo-FCC.png", x=X0, y=8, w=lw)
+            y_bas = max(y_bas, 8 + lw * hpx / wpx + 2)
+        except Exception:
+            pass
 
-        nombre = max(
-            nb_lignes(largeurs[i], valeurs[i])
-            for i in range(len(largeurs))
-        )
-        hauteur = max(5.0, nombre * hauteur_ligne + 1.5)
-
-        if pdf.get_y() + hauteur > Y_LIMITE:
-            # Ne jamais créer une deuxième page silencieusement.
-            raise ValueError(
-                "Le contrat dépasse une page A4. "
-                "Réduisez le nombre de lignes du tableau "
-                "ou raccourcissez les informations."
-            )
-
-        x_depart = 10
-        y_depart = pdf.get_y()
-
-        if fond:
-            pdf.set_fill_color(225, 225, 225)
-
-        for i, valeur in enumerate(valeurs):
-            x = x_depart + sum(largeurs[:i])
-            pdf.set_xy(x, y_depart)
-
-            pdf.multi_cell(
-                largeurs[i],
-                hauteur_ligne,
-                texte(valeur),
-                border=1,
-                align="C",
-                fill=fond
-            )
-
-        pdf.set_xy(10, y_depart + hauteur)
-
-    # ---------------------------------------------------------
-    # 1. LOGO ET EN-TÊTE FCC
-    # ---------------------------------------------------------
-    try:
-        if os.path.exists("Logo-FCC.png"):
-            pdf.image("Logo-FCC.png", x=10, y=7, w=29)
-    except Exception:
-        pass
-
-    pdf.set_xy(40, 8)
-    police("B", 10)
-    pdf.cell(
-        160, 5,
-        "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES",
-        align="C", ln=1
-    )
-
-    pdf.set_x(40)
-    police("BI", 8)
-    pdf.cell(
-        160, 4.5,
-        texte(f"Contrat n° {data_contrat.get('num', '')}"),
-        align="C", ln=1
-    )
-
-    pdf.set_x(40)
-    police("I", 6.1)
+    pdf.set_font("Times", "B", 12.5)
+    pdf.set_xy(50, 10)
+    pdf.cell(148, 6, "CONTRAT DE TRANSPORT ROUTIER DE MARCHANDISES", align="C")
+    pdf.set_font("Times", "BI", 10)
+    pdf.set_xy(50, 17)
+    pdf.cell(148, 5, _tt(f"Contrat n° {data_contrat.get('num', '')}"), align="C")
+    pdf.set_font("Times", "I", 7.5)
+    pdf.set_xy(50, 23)
     pdf.multi_cell(
-        160, 3.1,
-        texte(
-            "Régi par l'Acte uniforme OHADA du 22 mars 2003 "
-            "relatif aux contrats de transport de marchandises par route"
-        ),
-        align="C"
+        148, 3.2,
+        _tt("Régi par l'Acte uniforme OHADA du 22 mars 2003 relatif aux contrats de transport de "
+            "marchandises par route (« l'Acte uniforme »)"),
+        align="C",
     )
-
-    pdf.set_y(max(pdf.get_y(), 26))
+    y_bas = max(y_bas, pdf.get_y() + 1)
     pdf.set_draw_color(0, 0, 0)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.ln(2)
+    pdf.line(X0, y_bas, 198, y_bas)
+    pdf.set_y(y_bas + 3)
 
-    # ---------------------------------------------------------
-    # 2. PARTIES AU CONTRAT
-    # ---------------------------------------------------------
-    police("B", 6.7)
-    pdf.write(3.2, "ENTRE : ")
-    police("", 6.7)
-    pdf.write(
-        3.2,
-        texte(
-            "FRIENDS CAMEROON COMMODITIES (FCC), SARL, RCCM n° "
-            "CM-DLA-01-2024-B12-00270, NIU : M032416606242H, "
-            "siège social à Douala, représentée par le Département "
-            "Transport et Logistique, ci-après « le Donneur d'ordre » ;"
-        )
-    )
-    pdf.ln(3.6)
+    # ---------------- PARTIES ----------------
+    nom = _tm(data_contrat.get("transporteur_nom", "N/A"))
+    cni = _tm(data_contrat.get("transporteur_cni", "N/A") or "N/A")
+    niu = _tm(data_contrat.get("transporteur_nui", "N/A") or "N/A")
+    tel = _tm(data_contrat.get("transporteur_telephone", "N/A") or "N/A")
 
-    transporteur = data_contrat.get("transporteur_nom", "N/A")
-    cni = data_contrat.get("transporteur_cni", "N/A")
-    nui = data_contrat.get("transporteur_nui", "N/A")
-    telephone = data_contrat.get("transporteur_telephone", "N/A")
+    para("**ENTRE : FRIENDS CAMEROON COMMODITIES** (FCC), SARL, RCCM n° CM-DLA-01-2024-B12-00270, "
+         "NIU : M032416606242H, siège social à Douala, représentée par le Département Transport et "
+         "Logistique, ci-après « **le Donneur d'ordre** » ;".replace("« ", "\u00AB ").replace(" »", " \u00BB"))
+    para(f"**ET : M./Mme {nom}**, CNI : {cni}, NIU : {niu}, Téléphone : {tel}, ci-après "
+         "« **le Transporteur** ».")
 
-    police("B", 6.7)
-    pdf.write(3.2, "ET : ")
-    police("", 6.7)
-    pdf.write(
-        3.2,
-        texte(
-            f"M./Mme {transporteur}, CNI : {cni}, NUI : {nui}, "
-            f"Téléphone : {telephone}, ci-après « le Transporteur »."
-        )
-    )
-    pdf.ln(4)
+    # ---------------- ARTICLES ----------------
+    def ligne_grille(l1, v1, l2, v2):
+        ws = (30, 63, 30, 63)
+        pdf.set_font("Times", "B", fs)
+        n_l1, n_l2 = nb_l(ws[0] - 2.4, l1), nb_l(ws[2] - 2.4, l2)
+        pdf.set_font("Times", "", fs)
+        n_v1, n_v2 = nb_l(ws[1] - 2.4, v1), nb_l(ws[3] - 2.4, v2)
+        h = max(n_l1, n_l2, n_v1, n_v2) * lh + 2.4
+        y = pdf.get_y()
+        x = X0
+        for w, txt, gras, fond in ((ws[0], l1, True, True), (ws[1], v1, False, False),
+                                   (ws[2], l2, True, True), (ws[3], v2, False, False)):
+            pdf.set_draw_color(120, 120, 120)
+            if fond:
+                pdf.set_fill_color(235, 235, 235)
+                pdf.rect(x, y, w, h, "DF")
+            else:
+                pdf.rect(x, y, w, h)
+            pdf.set_font("Times", "B" if gras else "", fs)
+            n = nb_l(w - 2.4, txt)
+            pdf.set_xy(x + 1, y + (h - n * lh) / 2)
+            pdf.multi_cell(w - 2, lh, txt, align="L")
+            x += w
+        pdf.set_xy(X0, y + h)
 
-    # ---------------------------------------------------------
-    # 3. OBJET ET TABLEAU — COMME DANS LE MODÈLE FCC
-    # Le tableau est placé après l'article 2, pas à la fin.
-    # ---------------------------------------------------------
-    titre_article(
-        "Article 1 - Objet.",
-        "Le Transporteur s'engage à acheminer par route les marchandises "
-        "du lieu de prise en charge au lieu de livraison convenu. "
-        "Une lettre de voiture constate le transport."
-    )
+    for titre, corps in ARTICLES_TRANSPORT:
+        if titre.startswith("Article 2"):
+            para(f"**{titre}**", espace=0.8)
+            for i, lg in enumerate(lignes, start=1):
+                if len(lignes) > 1:
+                    pdf.set_x(X0)
+                    pdf.set_font("Times", "BI", fs)
+                    pdf.cell(LARG, lh, f"Transport n°{i}", align="L")
+                    pdf.ln(lh)
+                march = _tm(lg.get("marchandise") or "Fèves de Cacao")
+                if "sac" not in march.lower():
+                    march += ", emballé en sacs"
+                poids = lg.get("colis_poids_net", "")
+                if isinstance(poids, (int, float)):
+                    poids = f"{poids:,.0f} kg".replace(",", " ")
+                ligne_grille("Marchandise", march, "Colis / poids net", _tm(poids))
+                ligne_grille("Prise en charge", _tm(f"{lg.get('lieu_prise_en_charge', '')}, - date à convenir"),
+                             "Livraison", _tm(f"{lg.get('lieu_livraison', '')} - délai : à convenir"))
+                ligne_grille("Destinataire", _tm(lg.get("destinataire") or "FCC"),
+                             "Valeur déclarée", _tm(lg.get("valeur_declaree") or "Cf. Lettre de voiture"))
+                pdf.ln(1.2)
+            pdf.ln(0.8)
+            continue
 
-    titre_article(
-        "Article 2 - Désignation du transport.",
-        "Les marchandises, lieux et conditions sont détaillés ci-dessous."
-    )
-
-    pdf.ln(0.5)
-    police("B", 7.1)
-    pdf.cell(190, 4, "Tableau récapitulatif du transport :", ln=1)
-    pdf.ln(0.5)
-
-    largeurs = [27, 27, 22, 25, 29, 32, 28]
-    entetes = [
-        "Marchandise",
-        "Prise en charge",
-        "Colis / Poids",
-        "Prix (FCFA/T)",
-        "Destinataire",
-        "Livraison",
-        "Valeur déclarée"
-    ]
-
-    ligne_tableau(
-        entetes, largeurs,
-        hauteur_ligne=3.0,
-        fond=True, taille=5.5, gras=True
-    )
-
-    for ligne in lignes:
-        prix = float(ligne.get("prix_par_tonne", 0) or 0)
-
-        poids = ligne.get("colis_poids_net", "")
-        if isinstance(poids, (int, float)):
-            poids = f"{poids:,.0f} kg"
-
-        valeurs = [
-            ligne.get("marchandise", "Fèves de cacao"),
-            ligne.get("lieu_prise_en_charge", ""),
-            poids,
-            f"{prix:,.0f}",
-            ligne.get("destinataire", "FCC"),
-            ligne.get("lieu_livraison", ""),
-            ligne.get("valeur_declaree", "Cf. lettre de voiture")
-        ]
-
-        ligne_tableau(
-            valeurs, largeurs,
-            hauteur_ligne=3.0,
-            taille=5.6
-        )
-
-    pdf.ln(2)
-
-    # ---------------------------------------------------------
-    # 4. ARTICLES CONTRACTUELS
-    # Version condensée pour conserver une page A4.
-    # ---------------------------------------------------------
-    articles = [
-        (
-            "Article 3 - Obligations du Transporteur.",
-            "Fournir un véhicule adapté et en bon état, vérifier la "
-            "marchandise à la prise en charge, noter ses réserves, "
-            "livrer contre décharge et signaler tout empêchement."
-        ),
-        (
-            "Article 4 - Obligations du Donneur d'ordre.",
-            "Fournir un emballage adapté, les informations et documents "
-            "nécessaires, et déclarer la nature et la valeur des "
-            "marchandises particulières. Il répond des préjudices "
-            "liés à ses déclarations ou à l'emballage."
-        ),
-        (
-            "Article 5 - Termes de paiement.",
-            data_contrat.get(
+        if corps == "__PRIX__":
+            termes = _tm(data_contrat.get(
                 "termes_paiement",
-                "70 % au chargement et 30 % après déchargement "
-                "au lieu de livraison."
-            )
-        ),
-        (
-            "Article 6 - Responsabilité et assurance.",
-            "Le Transporteur répond des pertes, avaries et retards "
-            "selon l'Acte uniforme OHADA et ses causes d'exonération. "
-            "Les limites d'indemnisation et les assurances applicables "
-            "sont celles prévues par les textes en vigueur."
-        ),
-        (
-            "Article 7 - Réserves et réclamations.",
-            "La réception est constatée par un bon signé indiquant "
-            "le tonnage reçu et les réserves éventuelles. Les avis, "
-            "réclamations et délais de prescription sont régis "
-            "par l'Acte uniforme applicable."
-        ),
-        (
-            "Article 8 - Durée et résiliation.",
-            "Le contrat vaut pour le transport désigné. En cas de "
-            "manquement grave non réparé dans les huit jours suivant "
-            "une mise en demeure, l'autre partie peut le résilier."
-        ),
-        (
-            "Article 9 - Confidentialité.",
-            "Les parties s'interdisent de divulguer les informations "
-            "commerciales échangées dans le cadre du présent contrat."
-        ),
-        (
-            "Article 10 - Droit applicable et litiges.",
-            "Le contrat est régi par l'Acte uniforme OHADA et, pour "
-            "ce qu'il ne règle pas, par le droit camerounais. À défaut "
-            "d'accord amiable, le litige est porté devant la juridiction "
-            "compétente conformément aux textes applicables."
-        ),
-    ]
+                "70 % au chargement, 30 % après déchargement au lieu de la livraison.")).strip().rstrip(".")
+            if len(lignes) == 1:
+                prix = float(lignes[0].get("prix_par_tonne", 0) or 0)
+                phrase = f"Le prix du transport est fixé à **{_fmt_fr(prix)} FCFA / Tonne**."
+            else:
+                morceaux = []
+                for i, lg in enumerate(lignes, start=1):
+                    morceaux.append(
+                        f"transport n°{i} ({_tm(lg.get('lieu_prise_en_charge', ''))} vers "
+                        f"{_tm(lg.get('lieu_livraison', ''))}) : **{_fmt_fr(lg.get('prix_par_tonne', 0))} FCFA / Tonne**")
+                phrase = "Le prix du transport est fixé comme suit : " + " ; ".join(morceaux) + "."
+            corps = f"{phrase} Il est payable par le Donneur d'ordre de la manière suivante : {termes}."
+            para(f"**{titre}** {corps}")
+            continue
 
-    for titre, contenu in articles:
-        titre_article(titre, contenu)
+        para(f"**{titre}** {_tt(corps)}")
 
-    # ---------------------------------------------------------
-    # 5. LIEU, DATE ET SIGNATURES
-    # ---------------------------------------------------------
-    pdf.ln(1)
+    # ---------------- Vérification : tout doit tenir au-dessus de la zone signature ----------------
+    sig_top = geo["sig_top"]
+    if pdf.get_y() > sig_top - 9:
+        return None
 
-    date_signature = data_contrat.get("date_signature", "")
-    lieu_signature = data_contrat.get("lieu_signature", "Douala")
+    # ---------------- FAIT À + SIGNATURES (ancrées en bas de page) ----------------
+    date_sig = _tm(data_contrat.get("date_signature", ""))
+    lieu_sig = _tm(data_contrat.get("lieu_signature", "Douala"))
+    pdf.set_font("Times", "B", fs)
+    pdf.set_xy(X0, sig_top - 6.5)
+    pdf.cell(LARG, lh, f"Fait à {lieu_sig}, le {date_sig}, en deux (2) exemplaires originaux.")
 
-    police("B", 7)
-    pdf.multi_cell(
-        190, 4,
-        texte(
-            f"Fait à {lieu_signature}, le {date_signature}, "
-            "en deux (2) exemplaires originaux."
-        )
-    )
+    pdf.set_font("Times", "B", fs)
+    pdf.set_xy(X0, sig_top)
+    pdf.multi_cell(80, lh + 0.3, "**Le Donneur d'ordre**\nDépartement Transport & Logistique - FCC",
+                   align="C", markdown=True)
+    pdf.set_xy(118, sig_top)
+    pdf.multi_cell(80, lh + 0.3, f"**Le Transporteur**\n{nom}", align="C", markdown=True)
 
-    y_sig = pdf.get_y() + 3
-
-    if y_sig + 22 > Y_LIMITE:
-        raise ValueError(
-            "Le contenu dépasse une page A4. "
-            "Réduisez le nombre de lignes du tableau."
-        )
-
-    police("B", 7)
-    pdf.set_xy(10, y_sig)
-    pdf.multi_cell(
-        90, 4,
-        "Le Donneur d'ordre\nDépartement Transport & Logistique - FCC",
-        align="C"
-    )
-
-    pdf.set_xy(105, y_sig)
-    pdf.multi_cell(85, 4, "Le Transporteur", align="C")
-
-    # Cachet FCC sous la signature du donneur d'ordre
     if cachet_blob:
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix=".png"
-            ) as tmp:
-                tmp.write(cachet_blob)
+            octets = bytes(cachet_blob)
+            with Image.open(BytesIO(octets)) as im:
+                wpx, hpx = im.size
+            h_max = geo["sig_h"] - 9
+            w_c = min(34.0, h_max * wpx / hpx)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(octets)
                 tmp_path = tmp.name
-
-            pdf.image(tmp_path, x=34, y=y_sig + 9, w=28)
-
+            pdf.image(tmp_path, x=X0 + (80 - w_c) / 2, y=sig_top + 8, w=w_c)
         except Exception as e:
             logging.error(f"Erreur cachet contrat transport : {e}")
-
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 try:
@@ -2803,9 +2720,74 @@ def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
                 except OSError:
                     pass
 
-    # Retourner les octets PDF pour le téléchargement Streamlit
-    return bytes(pdf.output())
+    # ---------------- PIED DE PAGE ----------------
+    if geo["footer_h"]:
+        try:
+            pdf.image("Footer-FCC.png", x=(210 - geo["footer_w"]) / 2, y=geo["footer_y"], w=geo["footer_w"])
+        except Exception as e:
+            logging.error(f"Erreur footer contrat transport : {e}")
+    else:
+        pdf.set_font("Times", "", 6.5)
+        pdf.set_text_color(100, 100, 100)
+        pdf.set_xy(X0, 289)
+        pdf.cell(LARG, 4, "FRIENDS CAMEROON COMMODITIES - RCCM : CM-DLA-01-2024-B12-00270 - "
+                          "NIU : M032416606242H", align="C")
+    return pdf
 
+
+def generer_contrat_transport_pdf(data_contrat, lignes, cachet_blob=None):
+    """Contrat de transport OHADA sur 1 page A4, calqué sur le modèle FCC (textes complets).
+    La police est réduite automatiquement si le nombre de lignes l'exige."""
+    geo = _geometrie_transport()
+    if not lignes:
+        lignes = [{}]
+    for fs in (10, 9.5, 9, 8.5, 8, 7.5, 7, 6.5):
+        pdf = _rendre_contrat_transport(data_contrat, lignes, cachet_blob, fs, geo)
+        if pdf is not None:
+            return bytes(pdf.output())
+    raise ValueError("Le contrat ne tient pas sur une page A4 : réduisez le nombre de lignes de transport.")
+
+
+def charger_contrat_transport(numero_contrat):
+    """Retourne (data_pdf, lignes_pdf, signataire) à partir du numéro de contrat."""
+    row_c = fetch_one("""
+        SELECT ct.numero_contrat, ct.date_signature, ct.lieu_signature, ct.termes_paiement,
+               ct.signataire, COALESCE(ct.transporteur_cni, ''),
+               p.nom, p.telephone, p.nui
+        FROM contrats_transport ct
+        LEFT JOIN prestataires p ON ct.id_prestataire = p.id
+        WHERE ct.numero_contrat = %s
+    """, (numero_contrat,))
+    if not row_c:
+        return None, None, None
+
+    rows = fetch_all("""
+        SELECT ctl.marchandise, ctl.lieu_prise_en_charge, ctl.colis_poids_net,
+               ctl.prix_par_tonne, ctl.destinataire, ctl.lieu_livraison, ctl.valeur_declaree
+        FROM contrats_transport_lignes ctl
+        JOIN contrats_transport ct ON ctl.id_contrat = ct.id
+        WHERE ct.numero_contrat = %s
+        ORDER BY ctl.id
+    """, (numero_contrat,))
+    lignes_pdf = [{
+        "marchandise": r[0], "lieu_prise_en_charge": r[1], "colis_poids_net": r[2],
+        "prix_par_tonne": float(r[3] or 0), "destinataire": r[4],
+        "lieu_livraison": r[5], "valeur_declaree": r[6],
+    } for r in rows]
+
+    d = row_c[1]
+    date_str = d.strftime('%d/%m/%Y') if hasattr(d, 'strftime') else str(d or '')
+    data_pdf = {
+        "num": row_c[0],
+        "date_signature": date_str,
+        "lieu_signature": row_c[2] or "Douala",
+        "termes_paiement": row_c[3] or "",
+        "transporteur_cni": row_c[5] or "N/A",
+        "transporteur_nom": row_c[6] or "N/A",
+        "transporteur_telephone": row_c[7] or "N/A",
+        "transporteur_nui": row_c[8] or "N/A",
+    }
+    return data_pdf, lignes_pdf, row_c[4]
 
 def generer_bordereau_livraison_pdf(data_bl, filename=None):
     num_bl = data_bl.get('num_bl', 'BL-TEMP')
@@ -7397,8 +7379,13 @@ elif choix == "🏗️ Prestataires & Transitaires":
                     valeur_declaree VARCHAR(200)
                 )
             """)
+            _cur.execute(
+                "ALTER TABLE contrats_transport "
+                "ADD COLUMN IF NOT EXISTS transporteur_cni VARCHAR(100)"
+            )
             conn.commit()
     except Exception as e:
+        conn.rollback()
         logging.error(f"Erreur création tables contrats_transport : {e}")
 
     t1, t2, t3 = st.tabs([
@@ -7550,12 +7537,16 @@ elif choix == "🏗️ Prestataires & Transitaires":
                 # --- Numéro de contrat auto ---
                 try:
                     year = datetime.now().year
-                    row = fetch_one("SELECT COALESCE(MAX(id), 0) + 1 FROM contrats_transport")
+                    row = fetch_one(
+                        "SELECT COALESCE(MAX(CAST(split_part(numero_contrat, '/', 4) AS INTEGER)), 0) + 1 "
+                        "FROM contrats_transport WHERE numero_contrat ~ %s",
+                        (f"^(TRANSF|TRANSP)/FCC/{year}/[0-9]+$",)
+                    )
                     next_num = row[0] if row else 1
-                    num_contrat_auto = f"TRANSF/FCC/{year}/{next_num:03d}"
+                    num_contrat_auto = f"{PREFIXE_CONTRAT_TRANSPORT}/FCC/{year}/{next_num:03d}"
                 except Exception:
-                    num_contrat_auto = f"TRANSF/FCC/{datetime.now().year}/001"
-
+                    num_contrat_auto = f"{PREFIXE_CONTRAT_TRANSPORT}/FCC/{datetime.now().year}/001"
+                    
                 # --- En-tête ---
                 col_info1, col_info2, col_info3 = st.columns(3)
                 with col_info1:
@@ -7689,14 +7680,16 @@ elif choix == "🏗️ Prestataires & Transitaires":
                                     cur.execute("""
                                         INSERT INTO contrats_transport
                                         (numero_contrat, id_prestataire, date_signature,
-                                         lieu_signature, statut, termes_paiement, created_by)
-                                        VALUES (%s, %s, %s, %s, 'EN_ATTENTE', %s, %s)
+                                         lieu_signature, statut, termes_paiement, created_by,
+                                         transporteur_cni)
+                                        VALUES (%s, %s, %s, %s, 'EN_ATTENTE', %s, %s, %s)
                                         RETURNING id
                                     """, (
                                         num_contrat_auto, id_prestataire,
                                         date_signature.strftime('%Y-%m-%d'),
                                         lieu_signature, termes_paiement,
-                                        st.session_state.get('username', 'Agent')
+                                        st.session_state.get('username', 'Agent'),
+                                        cni_final
                                     ))
                                     id_contrat = cur.fetchone()[0]
 
@@ -7823,91 +7816,52 @@ elif choix == "🏗️ Prestataires & Transitaires":
                 )
                 id_contrat_sel = dict_contrats[choix_contrat]
 
-                if st.button("📄 Générer le PDF",
-                             type="primary",
-                             use_container_width=True,
-                             key="tc_gen_pdf_btn"):
-                    # --- Fetch header ---
-                    row_c = fetch_one("""
-                        SELECT ct.numero_contrat, ct.date_signature,
-                               ct.lieu_signature, ct.statut,
-                               ct.termes_paiement, ct.signataire,
-                               p.nom, p.telephone, p.nui
-                        FROM contrats_transport ct
-                        LEFT JOIN prestataires p ON ct.id_prestataire = p.id
-                        WHERE ct.id = %s
-                    """, (id_contrat_sel,))
+                row_ref = fetch_one(
+                    "SELECT numero_contrat, statut FROM contrats_transport WHERE id = %s",
+                    (id_contrat_sel,)
+                )
+                if not row_ref:
+                    st.error("❌ Contrat introuvable.")
+                else:
+                    num_sel, statut_sel = row_ref
+                    pdf_signe = None
+                    if statut_sel == "VALIDE":
+                        res = fetch_one(
+                            "SELECT fichier_pdf FROM documents_generes "
+                            "WHERE reference = %s AND type_doc = 'contrat_transport' AND statut = 'VALIDE'",
+                            (num_sel,)
+                        )
+                        if res and res[0]:
+                            pdf_signe = bytes(res[0])
 
-                    if not row_c:
-                        st.error("❌ Contrat introuvable.")
+                    if pdf_signe:
+                        st.success("✅ Contrat authentifié disponible (cachet + QR code).")
+                        st.download_button(
+                            "📥 Télécharger le contrat signé",
+                            data=pdf_signe,
+                            file_name=f"{num_sel.replace('/', '_')}_signe.pdf",
+                            mime="application/pdf",
+                            type="primary",
+                            use_container_width=True,
+                            key=f"tc_dl_signe_{id_contrat_sel}"
+                        )
                     else:
-                        # --- Fetch lignes ---
-                        rows_lignes = fetch_all("""
-                            SELECT marchandise, lieu_prise_en_charge, colis_poids_net,
-                                   prix_par_tonne, destinataire, lieu_livraison, valeur_declaree
-                            FROM contrats_transport_lignes
-                            WHERE id_contrat = %s
-                            ORDER BY id
-                        """, (id_contrat_sel,))
-
-                        lignes_pdf = [
-                            {
-                                "marchandise": rl[0],
-                                "lieu_prise_en_charge": rl[1],
-                                "colis_poids_net": rl[2],
-                                "prix_par_tonne": float(rl[3] or 0),
-                                "destinataire": rl[4],
-                                "lieu_livraison": rl[5],
-                                "valeur_declaree": rl[6],
-                            }
-                            for rl in rows_lignes
-                        ]
-
-                        # --- Cachet ---
-                        cachet = None
-                        if row_c[5]:
-                            res_c = fetch_one(
-                                "SELECT fichier_cachet FROM cachets_direction "
-                                "WHERE role_signataire = %s",
-                                (row_c[5],)
-                            )
-                            if res_c:
-                                cachet = res_c[0]
-
-                        # --- Format date ---
-                        date_sig_str = ""
-                        if row_c[1]:
-                            if hasattr(row_c[1], 'strftime'):
-                                date_sig_str = row_c[1].strftime('%d/%m/%Y')
-                            else:
-                                date_sig_str = str(row_c[1])
-
-                        data_pdf = {
-                            "num": row_c[0],
-                            "date_signature": date_sig_str,
-                            "lieu_signature": row_c[2] or "Douala",
-                            "termes_paiement": row_c[4] or "",
-                            "transporteur_nom": row_c[6] or "N/A",
-                            "transporteur_cni": "N/A",
-                            "transporteur_nui": row_c[8] or "N/A",
-                            "transporteur_telephone": row_c[7] or "N/A",
-                        }
-
-                        try:
-                            pdf_bytes = generer_contrat_transport_pdf(
-                                data_pdf, lignes_pdf, cachet_blob=cachet
-                            )
-                            st.success("✅ Contrat généré !")
-                            st.download_button(
-                                "📥 Télécharger le contrat PDF",
-                                data=pdf_bytes,
-                                file_name=f"{row_c[0].replace('/', '_')}.pdf",
-                                mime="application/pdf",
-                                use_container_width=True,
-                                key=f"tc_dl_{id_contrat_sel}"
-                            )
-                        except Exception as e:
-                            st.error(f"❌ Erreur de génération : {e}")
+                        st.info("ℹ️ Contrat non validé : seul un brouillon (sans cachet) est disponible.")
+                        if st.button("📄 Générer le brouillon", use_container_width=True,
+                                     key="tc_gen_pdf_btn"):
+                            data_pdf, lignes_pdf, _ = charger_contrat_transport(num_sel)
+                            try:
+                                pdf_bytes = generer_contrat_transport_pdf(data_pdf, lignes_pdf)
+                                st.download_button(
+                                    "⬇️ Télécharger le brouillon",
+                                    data=pdf_bytes,
+                                    file_name=f"{num_sel.replace('/', '_')}_brouillon.pdf",
+                                    mime="application/pdf",
+                                    use_container_width=True,
+                                    key=f"tc_dl_{id_contrat_sel}"
+                                )
+                            except Exception as e:
+                                st.error(f"❌ Erreur de génération : {e}")
     
 elif choix == "📦 Mouvements de Stock":
     
@@ -11372,69 +11326,9 @@ elif choix == "👑 Espace Direction":
                                         pdf_bytes = res[1] if isinstance(res, tuple) else res
 
                             elif doc_type == 'contrat_transport':
-                                row_c = fetch_one("""
-                                    SELECT ct.numero_contrat, ct.date_signature, ct.lieu_signature,
-                                           ct.termes_paiement, ct.signataire,
-                                           p.nom, p.telephone, p.nui
-                                    FROM contrats_transport ct
-                                    LEFT JOIN prestataires p ON ct.id_prestataire = p.id
-                                    WHERE ct.numero_contrat = %s
-                                """, (doc_ref,))
-                                
-                                if row_c:
-                                    rows_lignes = fetch_all("""
-                                        SELECT marchandise, lieu_prise_en_charge, colis_poids_net,
-                                               prix_par_tonne, destinataire, lieu_livraison, valeur_declaree
-                                        FROM contrats_transport_lignes ctl
-                                        JOIN contrats_transport ct ON ctl.id_contrat = ct.id
-                                        WHERE ct.numero_contrat = %s
-                                        ORDER BY ctl.id
-                                    """, (doc_ref,))
-                                    
-                                    lignes_pdf = [
-                                        {
-                                            "marchandise": rl[0], "lieu_prise_en_charge": rl[1],
-                                            "colis_poids_net": rl[2],
-                                            "prix_par_tonne": float(rl[3] or 0),
-                                            "destinataire": rl[4], "lieu_livraison": rl[5],
-                                            "valeur_declaree": rl[6],
-                                        } for rl in rows_lignes
-                                    ]
-                                    
-                                    date_sig = row_c[1].strftime('%d/%m/%Y') if hasattr(row_c[1], 'strftime') else str(row_c[1] or '')
-                                    data_pdf = {
-                                        "num": row_c[0],
-                                        "date_signature": date_sig,
-                                        "lieu_signature": row_c[2] or "Douala",
-                                        "termes_paiement": row_c[3] or "",
-                                        "transporteur_nom": row_c[5] or "N/A",
-                                        "transporteur_cni": "N/A",
-                                        "transporteur_nui": row_c[7] or "N/A",
-                                        "transporteur_telephone": row_c[6] or "N/A",
-                                    }
-    
-                                    # 🔧 LA CORRECTION EST ICI : On récupère le cachet AVANT de générer
-                                    cachet_a_utiliser = None
-                                    if role_signataire:
-                                        res_cachet = fetch_one(
-                                            "SELECT fichier_cachet FROM cachets_direction WHERE role_signataire = %s",
-                                            (role_signataire,)
-                                        )
-                                        if res_cachet:
-                                            cachet_a_utiliser = res_cachet[0]
-    
-                                    pdf_bytes = generer_contrat_transport_pdf(
-                                        data_pdf, lignes_pdf, cachet_blob=cachet_a_utiliser
-                                    )
-                                    
-                                    # Mise à jour statut
-                                    with conn.cursor() as cur:
-                                        cur.execute(
-                                            "UPDATE contrats_transport SET statut='VALIDE', signataire=%s "
-                                            "WHERE numero_contrat=%s",
-                                            (role_signataire, row_c[0])
-                                        )
-                                        conn.commit()
+                                data_pdf, lignes_pdf, _sig = charger_contrat_transport(doc_ref)
+                                if data_pdf:
+                                    pdf_bytes = generer_contrat_transport_pdf(data_pdf, lignes_pdf, cachet_blob=None)
                             # CAS 3 : FACTURE DE VENTE
                             elif doc_type == 'facture_vente':
                                 match = re.search(r"INV-(\d+)", doc_ref)
@@ -11576,6 +11470,13 @@ elif choix == "👑 Espace Direction":
                                                 data_contrat["signataire"] = role_signataire
                                                 res = generer_contrat_pdf(data_contrat, cachet_blob=cachet_blob)
                                                 pdf_bytes = res[1] if isinstance(res, tuple) else res
+                                                
+                                        elif row['type_doc'] == 'contrat_transport':
+                                                cur.execute("""
+                                                    UPDATE contrats_transport
+                                                    SET statut = 'VALIDE', signataire = %s
+                                                    WHERE numero_contrat = %s
+                                                """, (role_signataire, row['reference']))        
 
                                         elif doc_type in ['bon_caisse', 'bon_paiement', 'engagement_dette', 'acompte']:
                                             df_p = get_dataframe_from_query("""
@@ -11674,10 +11575,25 @@ elif choix == "👑 Espace Direction":
                                                         with open(nom_fichier, "rb") as f:
                                                             pdf_bytes = f.read()
                                                         os.remove(nom_fichier)
+                                                        
+                                        elif doc_type == 'contrat_transport':
+                                            data_pdf, lignes_pdf, _ = charger_contrat_transport(doc_ref)
+                                            if data_pdf:
+                                                pdf_bytes = generer_contrat_transport_pdf(
+                                                    data_pdf, lignes_pdf, cachet_blob=cachet_blob
+                                                )                
 
                                         # 3. Appliquer le QR code
                                         if pdf_bytes:
-                                            pdf_bytes_final = apposer_qr_sur_pdf(pdf_bytes, code_verif, row['reference'])
+                                            if doc_type == 'contrat_transport':
+                                                g = _geometrie_transport()
+                                                pdf_bytes_final = apposer_qr_sur_pdf(
+                                                    pdf_bytes, code_verif, row['reference'],
+                                                    x_qr=g["qr_x_pt"], y_qr=g["qr_y_pt"],
+                                                    largeur_qr=g["qr_size_pt"]
+                                                )
+                                            else:
+                                                pdf_bytes_final = apposer_qr_sur_pdf(pdf_bytes, code_verif, row['reference'])
                                             hash_final = calculer_hash_pdf(pdf_bytes_final)
                                         else:
                                             raise Exception("Impossible de générer le PDF avec cachet")
@@ -11734,6 +11650,13 @@ elif choix == "👑 Espace Direction":
                                                         SET statut = 'ANNULE', signataire = %s
                                                         WHERE numero_contrat = %s
                                                     """, (role_signataire, row['reference']))
+
+                                                elif row['type_doc'] == 'contrat_transport':
+                                                    cur.execute("""
+                                                        UPDATE contrats_transport
+                                                        SET statut = 'ANNULE', signataire = %s
+                                                        WHERE numero_contrat = %s
+                                                    """, (role_signataire, row['reference']))     
 
                                                 conn.commit()
 
