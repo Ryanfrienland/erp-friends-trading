@@ -11328,7 +11328,9 @@ elif choix == "👑 Espace Direction":
                             elif doc_type == 'contrat_transport':
                                 data_pdf, lignes_pdf, _sig = charger_contrat_transport(doc_ref)
                                 if data_pdf:
-                                    pdf_bytes = generer_contrat_transport_pdf(data_pdf, lignes_pdf, cachet_blob=None)
+                                    pdf_bytes = generer_contrat_transport_pdf(
+                                        data_pdf, lignes_pdf, cachet_blob=None
+                                    )
                             # CAS 3 : FACTURE DE VENTE
                             elif doc_type == 'facture_vente':
                                 match = re.search(r"INV-(\d+)", doc_ref)
