@@ -11473,12 +11473,26 @@ elif choix == "👑 Espace Direction":
                                                 res = generer_contrat_pdf(data_contrat, cachet_blob=cachet_blob)
                                                 pdf_bytes = res[1] if isinstance(res, tuple) else res
                                                 
-                                        elif row['type_doc'] == 'contrat_transport':
-                                                cur.execute("""
-                                                    UPDATE contrats_transport
-                                                    SET statut = 'VALIDE', signataire = %s
-                                                    WHERE numero_contrat = %s
-                                                """, (role_signataire, row['reference']))        
+                                    
+                                        elif doc_type == "contrat_transport":
+                                            data_pdf, lignes_pdf, _ = charger_contrat_transport(doc_ref)
+                                        
+                                            if not data_pdf:
+                                                raise ValueError(
+                                                    f"Contrat de transport introuvable : {doc_ref}"
+                                                )
+                                        
+                                            pdf_bytes = generer_contrat_transport_pdf(
+                                                data_pdf,
+                                                lignes_pdf,
+                                                cachet_blob=cachet_blob
+                                            )
+                                        
+                                            if not pdf_bytes:
+                                                raise ValueError(
+                                                    f"Le PDF du contrat {doc_ref} n'a pas été généré."
+                                                )
+
 
                                         elif doc_type in ['bon_caisse', 'bon_paiement', 'engagement_dette', 'acompte']:
                                             df_p = get_dataframe_from_query("""
@@ -11611,7 +11625,15 @@ elif choix == "👑 Espace Direction":
                                                   code_verification = %s,
                                                   fichier_pdf = %s
                                                 WHERE id = %s
-                                            """, (role_signataire, hash_final, code_verif, pdf_bytes_final, row['id']))
+                                        """, (role_signataire, hash_final, code_verif, pdf_bytes_final, row['id']))
+                                            if doc_type == "contrat_transport":
+                                                cur.execute("""
+                                                    UPDATE contrats_transport
+                                                    SET statut = 'VALIDE',
+                                                        signataire = %s,
+                                                        date_signature = CURRENT_TIMESTAMP
+                                                    WHERE numero_contrat = %s
+                                                """, (role_signataire, doc_ref))
                                             if row['type_doc'] == 'contrat':
                                                 cur.execute("""
                                                     UPDATE contrats
@@ -11624,6 +11646,7 @@ elif choix == "👑 Espace Direction":
 
                                     except Exception as e:
                                         st.error(f"Erreur lors de la validation : {e}")
+
                             
                             with col_b2:
                                 if st.button("❌ Rejeter", key=f"btn_reject_{row['id']}", use_container_width=True):
