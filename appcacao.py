@@ -11645,7 +11645,19 @@ elif choix == "👑 Espace Direction":
                                         st.rerun()
 
                                     except Exception as e:
-                                        st.error(f"Erreur lors de la validation : {e}")
+                                        try:
+                                            conn.rollback()
+                                        except Exception:
+                                            pass
+                                    
+                                        logging.exception(
+                                            "Erreur validation document %s",
+                                            row.get("reference", "inconnue")
+                                        )
+                                    
+                                        st.error(
+                                            f"❌ Échec de validation : {e}"
+                                        )
 
                             
                             with col_b2:
@@ -11675,13 +11687,6 @@ elif choix == "👑 Espace Direction":
                                                         SET statut = 'ANNULE', signataire = %s
                                                         WHERE numero_contrat = %s
                                                     """, (role_signataire, row['reference']))
-
-                                                elif row['type_doc'] == 'contrat_transport':
-                                                    cur.execute("""
-                                                        UPDATE contrats_transport
-                                                        SET statut = 'ANNULE', signataire = %s
-                                                        WHERE numero_contrat = %s
-                                                    """, (role_signataire, row['reference']))     
 
                                                 conn.commit()
 
