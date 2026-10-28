@@ -7346,48 +7346,6 @@ elif choix == "🏗️ Prestataires & Transitaires":
     st.title("🏗️ Prestataires & Transitaires")
     st.caption("Répertoire + Génération des contrats de transport routier conformes OHADA")
 
-    # ------------------------------------------------------------------
-    # Création des tables si elles n'existent pas (silencieux)
-    # ------------------------------------------------------------------
-    try:
-        with conn.cursor() as _cur:
-            _cur.execute("""
-                CREATE TABLE IF NOT EXISTS contrats_transport (
-                    id SERIAL PRIMARY KEY,
-                    numero_contrat VARCHAR(100) UNIQUE NOT NULL,
-                    id_prestataire INTEGER NOT NULL,
-                    date_signature DATE,
-                    lieu_signature VARCHAR(100) DEFAULT 'Douala',
-                    statut VARCHAR(50) DEFAULT 'EN_ATTENTE',
-                    signataire VARCHAR(50),
-                    termes_paiement TEXT,
-                    created_by VARCHAR(100),
-                    date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            _cur.execute("""
-                CREATE TABLE IF NOT EXISTS contrats_transport_lignes (
-                    id SERIAL PRIMARY KEY,
-                    id_contrat INTEGER NOT NULL
-                        REFERENCES contrats_transport(id) ON DELETE CASCADE,
-                    marchandise VARCHAR(200),
-                    lieu_prise_en_charge VARCHAR(200),
-                    colis_poids_net VARCHAR(100),
-                    prix_par_tonne NUMERIC(15,2),
-                    destinataire VARCHAR(200),
-                    lieu_livraison VARCHAR(200),
-                    valeur_declaree VARCHAR(200)
-                )
-            """)
-            _cur.execute(
-                "ALTER TABLE contrats_transport "
-                "ADD COLUMN IF NOT EXISTS transporteur_cni VARCHAR(100)"
-            )
-            conn.commit()
-    except Exception as e:
-        conn.rollback()
-        logging.error(f"Erreur création tables contrats_transport : {e}")
-
     t1, t2, t3 = st.tabs([
         "🏢 Prestataires",
         "🚢 Transitaires",
