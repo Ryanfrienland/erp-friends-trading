@@ -6657,38 +6657,46 @@ elif choix == "💰 Préfinancement Fournisseurs":
 
                         try:
                             with conn.cursor() as cur:
+                                # 1. Création du préfinancement en statut EN_ATTENTE (plus 'VERSE')
                                 cur.execute("""
                                     INSERT INTO prefinancements_fournisseurs
                                     (reference, id_fournisseur, montant_accorde, montant_verse, 
-                                     statut, observations, cree_par, valide_par, date_validation,
+                                     statut, observations, cree_par,
                                      numero_contrat)
-                                    VALUES (%s,%s,%s,%s,'VERSE',%s,%s,%s,NOW(),%s)
+                                    VALUES (%s,%s,%s,%s,'EN_ATTENTE',%s,%s,%s)
                                     RETURNING id
                                 """, (
-                                    ref_auto, dict_f[f_nom], montant_accorde, montant_accorde,
+                                    ref_auto, dict_f[f_nom], montant_accorde, 0.0, # 0 versé pour l'instant
                                     conditions.strip() if conditions else None,
-                                    st.session_state.get('username', 'Agent'),
                                     st.session_state.get('username', 'Agent'),
                                     numero_contrat_final
                                 ))
                                 id_pref = cur.fetchone()[0]
 
-                                ref_mvt = f"MVT-VER-{id_pref}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                # 2. Création du Bon de Paiement pour la Direction
+                                ref_doc = f"PAY-{ref_auto}"
+                                description_doc = f"Préfinancement fournisseur {f_nom} - Réf: {ref_auto}"
+                                if numero_contrat_final:
+                                    description_doc += f" (Contrat {numero_contrat_final})"
+
                                 cur.execute("""
-                                    INSERT INTO mouvements_prefinancements
-                                    (id_prefinancement, type_mouvement, montant, reference_operation,
-                                     commentaire, cree_par)
-                                    VALUES (%s,'VERSEMENT',%s,%s,%s,%s)
+                                    INSERT INTO documents_generes 
+                                    (type_doc, reference, montant, demandeur, description, statut)
+                                    VALUES ('bon_paiement', %s, %s, %s, %s, 'EN_ATTENTE')
                                 """, (
-                                    id_pref, montant_accorde, ref_mvt,
-                                    f"Versement initial" + (f" (Contrat {numero_contrat_final})" if numero_contrat_final else ""),
-                                    st.session_state.get('username', 'Agent')
+                                    ref_doc, 
+                                    montant_accorde, 
+                                    st.session_state.get('username', 'Agent'), 
+                                    description_doc
                                 ))
+                                
                                 conn.commit()
 
                             suffixe = f" · Contrat {numero_contrat_final}" if numero_contrat_final else " · Avance générale"
-                            log_action(f"Création préfinancement {ref_auto} ({montant_accorde:,.0f} FCFA){suffixe}")
-                            st.success(f"✅ Dossier **{ref_auto}** créé et versé ({montant_accorde:,.0f} FCFA){suffixe}.")
+                            log_action(f"Demande de préfinancement {ref_auto} ({montant_accorde:,.0f} FCFA){suffixe} soumise à la Direction")
+                            
+                            st.success(f"✅ Dossier **{ref_auto}** créé ({montant_accorde:,.0f} FCFA){suffixe}.")
+                            st.info("📥 Un **Bon de Paiement** a été automatiquement généré et transmis à la Direction pour validation.")
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
@@ -11258,8 +11266,41 @@ elif choix == "👑 Espace Direction":
                             elif doc_type in ['bon_caisse', 'bon_paiement', 'acompte', 'engagement_dette', 'reglement_dette']:
                                 # Extraire l'ID de l'achat depuis la référence (ex: PAY-1-LOT-...)
                                 import re
-                                match = re.search(r'PAY-(\d+)-', doc_ref)
-                                if match:
+                                # 🆕 CAS SPÉCIAL : BON DE PAIEMENT POUR PRÉFINANCEMENT
+                                    if doc_ref.startswith("PAY-PREF-"):
+                                        ref_pref = doc_ref.replace("PAY-", "")
+                                        pref_data = fetch_one("""
+                                            SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations
+                                            FROM prefinancements_fournisseurs pf
+                                            JOIN fournisseurs f ON pf.id_fournisseur = f.id
+                                            WHERE pf.reference = %s
+                                        """, (ref_pref,))
+                                        
+                                        if pref_data:
+                                            data_p = {
+                                                "num_paiement": doc_ref,
+                                                "date": datetime.now().strftime('%d/%m/%Y'),
+                                                "fournisseur": pref_data[1],
+                                                "num_lot": "N/A (Préfinancement)",
+                                                "num_contrat": pref_data[3] or "Avance Générale",
+                                                "quantite_kg": 0.0,
+                                                "prix_unitaire": 0.0,
+                                                "total": float(pref_data[2]),
+                                                "poids_net": 0.0,
+                                                "deductions": 0.0,
+                                                "libelle_deductions": "Aucune",
+                                                "versement": float(pref_data[2]),
+                                                "reste": 0.0,
+                                                "mode_reglement": "Virement bancaire",
+                                            }
+                                            # On précise le type 'bon_paiement'
+                                            res = generer_bon_paiement_pdf(data_p, type_document='bon_paiement')
+                                            pdf_bytes = res[1] if isinstance(res, tuple) else res
+                                    
+                                    # CAS NORMAL : ACHAT CLASSIQUE
+                                else:
+                                   match = re.search(r'PAY-(\d+)-', doc_ref)
+                                    if match:
                                     id_achat = int(match.group(1))
                                     achat_row = fetch_one("""
                                         SELECT a.id, a.date, f.nom AS fournisseur, 
@@ -11572,7 +11613,18 @@ elif choix == "👑 Espace Direction":
                                             if data_pdf:
                                                 pdf_bytes = generer_contrat_transport_pdf(
                                                     data_pdf, lignes_pdf, cachet_blob=cachet_blob
-                                                )                
+                                                )  
+
+                                        # 🆕 Si c'est un bon de paiement lié à un préfinancement, on le valide aussi
+                                        if row['type_doc'] == 'bon_paiement' and row['reference'].startswith('PAY-PREF-'):
+                                            ref_pref = row['reference'].replace('PAY-', '')
+                                            cur.execute("""
+                                                UPDATE prefinancements_fournisseurs
+                                                SET statut = 'VALIDE',
+                                                    valide_par = %s,
+                                                    date_validation = CURRENT_TIMESTAMP
+                                                WHERE reference = %s
+                                            """, (role_signataire, ref_pref))
 
                                         # 3. Appliquer le QR code
                                         if pdf_bytes:
