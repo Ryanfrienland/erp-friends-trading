@@ -31,7 +31,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ==========================================
 st.set_page_config(page_title="ERP FRIENDS TRADING", layout="wide")
 
-
+from qr_verifier import afficher_page_verification
+afficher_page_verification()
 # ==========================================
 # ==========================================
 # 2. BASE DE DONNÉES ET CRÉATION DES TABLES (AVANT LA CONNEXION !)
