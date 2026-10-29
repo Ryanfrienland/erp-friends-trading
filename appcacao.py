@@ -31,6 +31,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ==========================================
 st.set_page_config(page_title="ERP FRIENDS TRADING", layout="wide")
 
+def fetch_one(query, params=None, default=None):
+    """Exécute une requête SELECT et retourne une seule ligne."""
+    try:
+        with conn.cursor() as cur:
+            # ...
+            row = cur.fetchone()
+            return row if row is not None else default
+    except Exception as e:
+        logging.error(f"Erreur fetch_one : {e}")
+        raise
 # ==========================================================
 # 🔍 POINT D'ENTRÉE : VÉRIFICATION VIA QR CODE
 # ==========================================================
