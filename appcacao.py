@@ -11206,7 +11206,6 @@ elif choix == "👑 Espace Direction":
             }
 
             for row in df_attente.to_dict('records'):
-    # row est maintenant un dictionnaire
                 doc_type = row['type_doc']
                 doc_ref = row['reference']
                 icone, libelle = type_traduit_map.get(row['type_doc'], ('📌', row['type_doc'].upper()))
@@ -11224,6 +11223,8 @@ elif choix == "👑 Espace Direction":
                         doc_ref = row['reference']
 
                         try:
+                            import re # On s'assure que 're' est importé
+                            
                             # CAS 1 : CONTRAT
                             if doc_type == 'contrat':
                                 row_contrat = fetch_one("""
@@ -11237,8 +11238,6 @@ elif choix == "👑 Espace Direction":
                                     WHERE c.numero_contrat = %s
                                 """, (doc_ref,))
                                 if row_contrat:
-                                    # Récupération des noms de colonnes pour construire le dict
-                                    # On utilise get_dataframe_from_query pour obtenir les colonnes
                                     df_contrat = get_dataframe_from_query("""
                                         SELECT 
                                             c.*,
@@ -11264,82 +11263,80 @@ elif choix == "👑 Espace Direction":
 
                             # CAS 2 : BON DE CAISSE / PAIEMENT / ACOMPTE / ENGAGEMENT DETTE
                             elif doc_type in ['bon_caisse', 'bon_paiement', 'acompte', 'engagement_dette', 'reglement_dette']:
-                                # Extraire l'ID de l'achat depuis la référence (ex: PAY-1-LOT-...)
-                                import re
+                                
                                 # 🆕 CAS SPÉCIAL : BON DE PAIEMENT POUR PRÉFINANCEMENT
-                                    if doc_ref.startswith("PAY-PREF-"):
-                                        ref_pref = doc_ref.replace("PAY-", "")
-                                        pref_data = fetch_one("""
-                                            SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations
-                                            FROM prefinancements_fournisseurs pf
-                                            JOIN fournisseurs f ON pf.id_fournisseur = f.id
-                                            WHERE pf.reference = %s
-                                        """, (ref_pref,))
-                                        
-                                        if pref_data:
-                                            data_p = {
-                                                "num_paiement": doc_ref,
-                                                "date": datetime.now().strftime('%d/%m/%Y'),
-                                                "fournisseur": pref_data[1],
-                                                "num_lot": "N/A (Préfinancement)",
-                                                "num_contrat": pref_data[3] or "Avance Générale",
-                                                "quantite_kg": 0.0,
-                                                "prix_unitaire": 0.0,
-                                                "total": float(pref_data[2]),
-                                                "poids_net": 0.0,
-                                                "deductions": 0.0,
-                                                "libelle_deductions": "Aucune",
-                                                "versement": float(pref_data[2]),
-                                                "reste": 0.0,
-                                                "mode_reglement": "Virement bancaire",
-                                            }
-                                            # On précise le type 'bon_paiement'
-                                            res = generer_bon_paiement_pdf(data_p, type_document='bon_paiement')
-                                            pdf_bytes = res[1] if isinstance(res, tuple) else res
+                                if doc_ref.startswith("PAY-PREF-"):
+                                    ref_pref = doc_ref.replace("PAY-", "")
+                                    pref_data = fetch_one("""
+                                        SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations
+                                        FROM prefinancements_fournisseurs pf
+                                        JOIN fournisseurs f ON pf.id_fournisseur = f.id
+                                        WHERE pf.reference = %s
+                                    """, (ref_pref,))
                                     
-                                    # CAS NORMAL : ACHAT CLASSIQUE
-                                else:
-                                   match = re.search(r'PAY-(\d+)-', doc_ref)
-                                    if match:
-                                    id_achat = int(match.group(1))
-                                    achat_row = fetch_one("""
-                                        SELECT a.id, a.date, f.nom AS fournisseur, 
-                                            a.numero_de_lot AS num_lot, a.quantite_kg, 
-                                            a.prix_unitaire, a.total, 
-                                            a.montant_avance AS versement, 
-                                            (a.total - a.montant_avance) AS reste, 
-                                            a.statut, a.numero_contrat, 
-                                            a.poids_brut, a.poids_net, 
-                                            f.numero_de_compte AS compte,
-                                            a.deductions, a.libelle_deductions
-                                        FROM achats a
-                                        LEFT JOIN fournisseurs f ON a.id_fournisseur = f.id
-                                        WHERE a.id = %s
-                                    """, (id_achat,))
-
-                                    if achat_row:
+                                    if pref_data:
                                         data_p = {
-                                            "id": achat_row[0],
-                                            "date": achat_row[1],
-                                            "fournisseur": achat_row[2],
-                                            "num_lot": achat_row[3],
-                                            "quantite_kg": achat_row[4],
-                                            "prix_unitaire": achat_row[5],
-                                            "total": achat_row[6],
-                                            "versement": achat_row[7],
-                                            "reste": achat_row[8],
-                                            "statut": achat_row[9],
-                                            "num_contrat": achat_row[10],
-                                            "poids_brut": achat_row[11],
-                                            "poids_net": achat_row[12],
-                                            "compte": achat_row[13],
-                                            "deductions": achat_row[14],
-                                            "libelle_deductions": achat_row[15]
+                                            "num_paiement": doc_ref,
+                                            "date": datetime.now().strftime('%d/%m/%Y'),
+                                            "fournisseur": pref_data[1],
+                                            "num_lot": "N/A (Préfinancement)",
+                                            "num_contrat": pref_data[3] or "Avance Générale",
+                                            "quantite_kg": 0.0,
+                                            "prix_unitaire": 0.0,
+                                            "total": float(pref_data[2]),
+                                            "poids_net": 0.0,
+                                            "deductions": 0.0,
+                                            "libelle_deductions": "Aucune",
+                                            "versement": float(pref_data[2]),
+                                            "reste": 0.0,
+                                            "mode_reglement": "Virement bancaire",
                                         }
-                                        if 'code_verification' in row:
-                                            data_p['code_verification'] = row['code_verification']
-                                        res = generer_bon_paiement_pdf(data_p, type_document=doc_type)
+                                        res = generer_bon_paiement_pdf(data_p, type_document='bon_paiement')
                                         pdf_bytes = res[1] if isinstance(res, tuple) else res
+                                
+                                # CAS NORMAL : ACHAT CLASSIQUE
+                                else:
+                                    match = re.search(r'PAY-(\d+)-', doc_ref)
+                                    if match:
+                                        id_achat = int(match.group(1))
+                                        achat_row = fetch_one("""
+                                            SELECT a.id, a.date, f.nom AS fournisseur, 
+                                                a.numero_de_lot AS num_lot, a.quantite_kg, 
+                                                a.prix_unitaire, a.total, 
+                                                a.montant_avance AS versement, 
+                                                (a.total - a.montant_avance) AS reste, 
+                                                a.statut, a.numero_contrat, 
+                                                a.poids_brut, a.poids_net, 
+                                                f.numero_de_compte AS compte,
+                                                a.deductions, a.libelle_deductions
+                                            FROM achats a
+                                            LEFT JOIN fournisseurs f ON a.id_fournisseur = f.id
+                                            WHERE a.id = %s
+                                        """, (id_achat,))
+
+                                        if achat_row:
+                                            data_p = {
+                                                "id": achat_row[0],
+                                                "date": achat_row[1],
+                                                "fournisseur": achat_row[2],
+                                                "num_lot": achat_row[3],
+                                                "quantite_kg": achat_row[4],
+                                                "prix_unitaire": achat_row[5],
+                                                "total": achat_row[6],
+                                                "versement": achat_row[7],
+                                                "reste": achat_row[8],
+                                                "statut": achat_row[9],
+                                                "num_contrat": achat_row[10],
+                                                "poids_brut": achat_row[11],
+                                                "poids_net": achat_row[12],
+                                                "compte": achat_row[13],
+                                                "deductions": achat_row[14],
+                                                "libelle_deductions": achat_row[15]
+                                            }
+                                            if 'code_verification' in row:
+                                                data_p['code_verification'] = row['code_verification']
+                                            res = generer_bon_paiement_pdf(data_p, type_document=doc_type)
+                                            pdf_bytes = res[1] if isinstance(res, tuple) else res
 
                             elif doc_type == 'contrat_transport':
                                 data_pdf, lignes_pdf, _sig = charger_contrat_transport(doc_ref)
@@ -11347,6 +11344,7 @@ elif choix == "👑 Espace Direction":
                                     pdf_bytes = generer_contrat_transport_pdf(
                                         data_pdf, lignes_pdf, cachet_blob=None
                                     )
+                                    
                             # CAS 3 : FACTURE DE VENTE
                             elif doc_type == 'facture_vente':
                                 match = re.search(r"INV-(\d+)", doc_ref)
@@ -11361,7 +11359,6 @@ elif choix == "👑 Espace Direction":
                                         WHERE v.id = %s
                                     """, (id_vente,))
                                     if row_vente:
-                                        # Récupération des colonnes
                                         df_vente = get_dataframe_from_query("""
                                             SELECT v.id, v.date_vente, c.nom, c.email, c.pays, c.nui, 
                                                    v.quantite_kg, v.prix_unitaire, v.total, v.devise,
@@ -11489,7 +11486,6 @@ elif choix == "👑 Espace Direction":
                                                 res = generer_contrat_pdf(data_contrat, cachet_blob=cachet_blob)
                                                 pdf_bytes = res[1] if isinstance(res, tuple) else res
                                                 
-                                    
                                         elif doc_type == "contrat_transport":
                                             data_pdf, lignes_pdf, _ = charger_contrat_transport(doc_ref)
                                         
@@ -11509,36 +11505,74 @@ elif choix == "👑 Espace Direction":
                                                     f"Le PDF du contrat {doc_ref} n'a pas été généré."
                                                 )
 
-
                                         elif doc_type in ['bon_caisse', 'bon_paiement', 'engagement_dette', 'acompte']:
-                                            df_p = get_dataframe_from_query("""
-                                                SELECT a.id, a.date, f.nom AS fournisseur, a.numero_de_lot AS num_lot,
-                                                       a.quantite_kg, a.prix_unitaire, a.total, a.montant_avance AS versement,
-                                                       (a.total - a.montant_avance) AS reste, a.statut, a.numero_contrat,
-                                                       a.poids_brut, a.poids_net, f.numero_de_compte AS compte,
-                                                       a.deductions, a.libelle_deductions
-                                                FROM achats a
-                                                LEFT JOIN fournisseurs f ON a.id_fournisseur = f.id
-                                                WHERE a.numero_de_lot = %s OR CAST(a.id AS TEXT) = %s OR %s LIKE '%%' || a.numero_de_lot || '%%'
-                                                ORDER BY a.id DESC LIMIT 1
-                                            """, (doc_ref, doc_ref, doc_ref))
-                                            if not df_p.empty:
-                                                data_p = df_p.iloc[0].to_dict()
-                                                data_p["num_paiement"] = doc_ref
-                                                data_p["total"] = float(data_p.get("total") or 0.0)
-                                                data_p["versement"] = float(data_p.get("versement") or 0.0)
-                                                data_p["reste"] = float(data_p.get("reste") or 0.0)
-                                                data_p["quantite_kg"] = float(data_p.get("quantite_kg") or 0.0)
-                                                data_p["prix_unitaire"] = float(data_p.get("prix_unitaire") or 0.0)
-                                                data_p["poids_net"] = float(data_p.get("poids_net") or 0.0)
-                                                data_p["code_verification"] = code_verif
-                                                data_p["code_verif"] = code_verif
-                                                res = generer_bon_paiement_pdf(
-                                                    data_p,
-                                                    type_document=doc_type,
-                                                    cachet_blob=cachet_blob
-                                                )
-                                                pdf_bytes = res[1] if isinstance(res, tuple) else res
+                                            
+                                            # 🆕 GESTION PRE-FINANCEMENT LORS DE LA VALIDATION
+                                            if doc_ref.startswith("PAY-PREF-"):
+                                                ref_pref = doc_ref.replace("PAY-", "")
+                                                pref_data = fetch_one("""
+                                                    SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations
+                                                    FROM prefinancements_fournisseurs pf
+                                                    JOIN fournisseurs f ON pf.id_fournisseur = f.id
+                                                    WHERE pf.reference = %s
+                                                """, (ref_pref,))
+                                                
+                                                if pref_data:
+                                                    data_p = {
+                                                        "num_paiement": doc_ref,
+                                                        "date": datetime.now().strftime('%d/%m/%Y'),
+                                                        "fournisseur": pref_data[1],
+                                                        "num_lot": "N/A (Préfinancement)",
+                                                        "num_contrat": pref_data[3] or "Avance Générale",
+                                                        "quantite_kg": 0.0,
+                                                        "prix_unitaire": 0.0,
+                                                        "total": float(pref_data[2]),
+                                                        "poids_net": 0.0,
+                                                        "deductions": 0.0,
+                                                        "libelle_deductions": "Aucune",
+                                                        "versement": float(pref_data[2]),
+                                                        "reste": 0.0,
+                                                        "mode_reglement": "Virement bancaire",
+                                                        "code_verification": code_verif,
+                                                        "code_verif": code_verif
+                                                    }
+                                                    res = generer_bon_paiement_pdf(
+                                                        data_p,
+                                                        type_document=doc_type,
+                                                        cachet_blob=cachet_blob
+                                                    )
+                                                    pdf_bytes = res[1] if isinstance(res, tuple) else res
+                                            
+                                            # CAS NORMAL (ACHAT)
+                                            else:
+                                                df_p = get_dataframe_from_query("""
+                                                    SELECT a.id, a.date, f.nom AS fournisseur, a.numero_de_lot AS num_lot,
+                                                           a.quantite_kg, a.prix_unitaire, a.total, a.montant_avance AS versement,
+                                                           (a.total - a.montant_avance) AS reste, a.statut, a.numero_contrat,
+                                                           a.poids_brut, a.poids_net, f.numero_de_compte AS compte,
+                                                           a.deductions, a.libelle_deductions
+                                                    FROM achats a
+                                                    LEFT JOIN fournisseurs f ON a.id_fournisseur = f.id
+                                                    WHERE a.numero_de_lot = %s OR CAST(a.id AS TEXT) = %s OR %s LIKE '%%' || a.numero_de_lot || '%%'
+                                                    ORDER BY a.id DESC LIMIT 1
+                                                """, (doc_ref, doc_ref, doc_ref))
+                                                if not df_p.empty:
+                                                    data_p = df_p.iloc[0].to_dict()
+                                                    data_p["num_paiement"] = doc_ref
+                                                    data_p["total"] = float(data_p.get("total") or 0.0)
+                                                    data_p["versement"] = float(data_p.get("versement") or 0.0)
+                                                    data_p["reste"] = float(data_p.get("reste") or 0.0)
+                                                    data_p["quantite_kg"] = float(data_p.get("quantite_kg") or 0.0)
+                                                    data_p["prix_unitaire"] = float(data_p.get("prix_unitaire") or 0.0)
+                                                    data_p["poids_net"] = float(data_p.get("poids_net") or 0.0)
+                                                    data_p["code_verification"] = code_verif
+                                                    data_p["code_verif"] = code_verif
+                                                    res = generer_bon_paiement_pdf(
+                                                        data_p,
+                                                        type_document=doc_type,
+                                                        cachet_blob=cachet_blob
+                                                    )
+                                                    pdf_bytes = res[1] if isinstance(res, tuple) else res
 
                                         elif doc_type == 'reglement_dette':
                                             match = re.search(r"REG-(\d+)-", doc_ref)
@@ -11607,24 +11641,6 @@ elif choix == "👑 Espace Direction":
                                                         with open(nom_fichier, "rb") as f:
                                                             pdf_bytes = f.read()
                                                         os.remove(nom_fichier)
-                                                        
-                                        elif doc_type == 'contrat_transport':
-                                            data_pdf, lignes_pdf, _ = charger_contrat_transport(doc_ref)
-                                            if data_pdf:
-                                                pdf_bytes = generer_contrat_transport_pdf(
-                                                    data_pdf, lignes_pdf, cachet_blob=cachet_blob
-                                                )  
-
-                                        # 🆕 Si c'est un bon de paiement lié à un préfinancement, on le valide aussi
-                                        if row['type_doc'] == 'bon_paiement' and row['reference'].startswith('PAY-PREF-'):
-                                            ref_pref = row['reference'].replace('PAY-', '')
-                                            cur.execute("""
-                                                UPDATE prefinancements_fournisseurs
-                                                SET statut = 'VALIDE',
-                                                    valide_par = %s,
-                                                    date_validation = CURRENT_TIMESTAMP
-                                                WHERE reference = %s
-                                            """, (role_signataire, ref_pref))
 
                                         # 3. Appliquer le QR code
                                         if pdf_bytes:
@@ -11641,7 +11657,7 @@ elif choix == "👑 Espace Direction":
                                         else:
                                             raise Exception("Impossible de générer le PDF avec cachet")
 
-                                        # 4. Mise à jour en base
+                                        # 4. Mise à jour en base (DANS LE WITH CURSOR)
                                         with conn.cursor() as cur:
                                             cur.execute("""
                                                 UPDATE documents_generes
@@ -11652,7 +11668,8 @@ elif choix == "👑 Espace Direction":
                                                   code_verification = %s,
                                                   fichier_pdf = %s
                                                 WHERE id = %s
-                                        """, (role_signataire, hash_final, code_verif, pdf_bytes_final, row['id']))
+                                            """, (role_signataire, hash_final, code_verif, pdf_bytes_final, row['id']))
+                                            
                                             if doc_type == "contrat_transport":
                                                 cur.execute("""
                                                     UPDATE contrats_transport
@@ -11661,13 +11678,27 @@ elif choix == "👑 Espace Direction":
                                                         date_signature = CURRENT_TIMESTAMP
                                                     WHERE numero_contrat = %s
                                                 """, (role_signataire, doc_ref))
+                                                
                                             if row['type_doc'] == 'contrat':
                                                 cur.execute("""
                                                     UPDATE contrats
                                                     SET statut = 'VALIDE', signataire = %s, date_signature = CURRENT_TIMESTAMP
                                                     WHERE numero_contrat = %s
                                                 """, (role_signataire, row['reference']))
+                                                
+                                            # 🆕 Si c'est un bon de paiement lié à un préfinancement, on le valide aussi
+                                            if row['type_doc'] == 'bon_paiement' and row['reference'].startswith('PAY-PREF-'):
+                                                ref_pref = row['reference'].replace('PAY-', '')
+                                                cur.execute("""
+                                                    UPDATE prefinancements_fournisseurs
+                                                    SET statut = 'VALIDE',
+                                                        valide_par = %s,
+                                                        date_validation = CURRENT_TIMESTAMP
+                                                    WHERE reference = %s
+                                                """, (role_signataire, ref_pref))
+                                                
                                             conn.commit()
+                                            
                                         st.toast(f"✅ Document {row['reference']} validé et authentifié (code: {code_verif})", icon="✅")
                                         st.rerun()
 
@@ -11686,17 +11717,13 @@ elif choix == "👑 Espace Direction":
                                             f"❌ Échec de validation : {e}"
                                         )
 
-                            
                             with col_b2:
                                 if st.button("❌ Rejeter", key=f"btn_reject_{row['id']}", use_container_width=True):
-                                    # Vérifier que le motif est renseigné
                                     if not motif_rejet.strip():
                                         st.error("❌ Veuillez indiquer un motif pour le rejet.")
                                     else:
                                         try:
-                                            # Mise à jour du document
                                             with conn.cursor() as cur:
-                                                # On met à jour le statut, signataire, date et on ajoute le motif à la description
                                                 nouvelle_description = f"{row['description']} (REJETÉ : {motif_rejet.strip()})"
                                                 cur.execute("""
                                                     UPDATE documents_generes
@@ -11707,19 +11734,25 @@ elif choix == "👑 Espace Direction":
                                                     WHERE id = %s
                                                 """, (role_signataire, nouvelle_description, row['id']))
 
-                                                # Si c'est un contrat, on met aussi son statut à 'ANNULE' (ou 'REJETE')
                                                 if row['type_doc'] == 'contrat':
                                                     cur.execute("""
                                                         UPDATE contrats
                                                         SET statut = 'ANNULE', signataire = %s
                                                         WHERE numero_contrat = %s
                                                     """, (role_signataire, row['reference']))
+                                                    
+                                                # 🆕 Si on rejette un préfinancement
+                                                if row['type_doc'] == 'bon_paiement' and row['reference'].startswith('PAY-PREF-'):
+                                                    ref_pref = row['reference'].replace('PAY-', '')
+                                                    cur.execute("""
+                                                        UPDATE prefinancements_fournisseurs
+                                                        SET statut = 'ANNULE'
+                                                        WHERE reference = %s
+                                                    """, (ref_pref,))
 
                                                 conn.commit()
 
-                                            # Journalisation
                                             log_action(f"Document {row['reference']} rejeté par {role_signataire} - Motif : {motif_rejet.strip()}")
-
                                             st.toast(f"❌ Document {row['reference']} rejeté.", icon="❌")
                                             st.rerun()
 
