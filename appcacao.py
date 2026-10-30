@@ -4925,8 +4925,16 @@ elif choix == "🧾 Achats (Entrees)":
                                     else:
                                         st.warning("Aucun compte secondaire trouvé pour ce fournisseur. Le compte principal sera utilisé.")
 
-                            if st.button("🖨️ Générer le PDF", type="primary", use_container_width=True):
+                           if st.button(
+                                "🖨️ Générer le PDF",
+                                type="primary",
+                                use_container_width=True,
+                                key=f"generer_pdf_{id_doc}"
+                            ):
                                 try:
+                                    res_pdf = None
+                                    pdf_bytes = None
+                                    path_pdf = None
                                     row_sign = fetch_one("SELECT signataire FROM documents_generes WHERE id = %s", (id_doc,))
                                     signataire_doc = row_sign[0] if row_sign else None
 
@@ -5089,96 +5097,51 @@ elif choix == "🧾 Achats (Entrees)":
                                             cachet_blob=cachet_a_utiliser
                                         )
 
-                                        
-
-                                    if not row:
-                                        st.error("❌ Achat introuvable.")
-                                        st.stop()
-
-                                    row_code = fetch_one("SELECT code_verification, montant FROM documents_generes WHERE id = %s", (id_doc,))
-                                    code_verif = row_code[0] if row_code else None
-                                    montant_doc = float(row_code[1] or 0.0) if row_code else 0.0
-
-                                    total_achat = float(row[5] or 0.0)
-                                    avance_actuelle = float(row[6] or 0.0)
-
-                                    data_paiement = {
-                                        'num_paiement': ref_doc,
-                                        'date': datetime.now().strftime('%d/%m/%Y'),
-                                        'fournisseur': row[2],
-                                        'num_lot': row[1],
-                                        'num_contrat': row[7] or 'N/A',
-                                        'quantite_kg': float(row[3] or 0.0),
-                                        'prix_unitaire': float(row[4] or 0.0),
-                                        'total': total_achat,
-                                        'poids_net': float(row[8] or 0.0),
-                                        'deductions': float(row[9] or 0.0),
-                                        'libelle_deductions': row[10] or '',
-                                        'mode_reglement': 'Virement bancaire',
-                                        'code_verification': code_verif,
-                                        'montant_regle': montant_doc,
-                                        'num_compte': compte_a_utiliser  # 👈 On passe le compte choisi !
-                                    }
-
-                                    # ... (le reste du code de génération reste identique)
-                                    if type_doc == 'reglement_dette':
-                                        avance_avant = max(0.0, avance_actuelle - montant_doc)
-                                        dette_initiale = max(0.0, total_achat - avance_avant)
-                                        data_paiement['dette_initiale'] = dette_initiale
-                                        data_paiement['montant_regle'] = montant_doc
-                                        data_paiement['versement'] = montant_doc
-                                        data_paiement['reste'] = max(0.0, dette_initiale - montant_doc)
-                                    elif type_doc in ['bon_paiement', 'bon_caisse', 'engagement_dette']:
-                                        data_paiement['versement'] = montant_doc if montant_doc > 0 else avance_actuelle
-                                        data_paiement['reste'] = max(0.0, total_achat - avance_actuelle)
-                                    else:
-                                        data_paiement['versement'] = avance_actuelle
-                                        data_paiement['reste'] = max(0.0, total_achat - avance_actuelle)
-
-                                    if type_doc in ['bon_paiement', 'bon_caisse', 'engagement_dette', 'reglement_dette']:
-                                        res_pdf = generer_bon_paiement_pdf(
-                                            data_paiement=data_paiement,
-                                            type_document=type_doc,
-                                            signataire=signataire_doc if signataire_doc else "DG",
-                                            cachet_blob=cachet_a_utiliser
-                                        )
-                                    else:
-                                        st.error("❌ Type non supporté.")
-                                        st.stop()
-
-                                    path_pdf, pdf_bytes = None, None
+                                    
+                                    # =====================================================
+                                    # RÉCUPÉRATION DU PDF GÉNÉRÉ
+                                    # =====================================================
+                                    path_pdf = None
+                                    pdf_bytes = None
+                                    
                                     if isinstance(res_pdf, tuple):
                                         for item in res_pdf:
-                                            if isinstance(item, str):
-                                                path_pdf = item
-                                            elif isinstance(item, bytes):
+                                            if isinstance(item, bytes):
                                                 pdf_bytes = item
-                                    elif isinstance(res_pdf, str):
-                                        path_pdf = res_pdf
+                                            elif isinstance(item, str):
+                                                path_pdf = item
+                                    
                                     elif isinstance(res_pdf, bytes):
                                         pdf_bytes = res_pdf
-
+                                    
+                                    elif isinstance(res_pdf, str):
+                                        path_pdf = res_pdf
+                                    
+                                    # Si le générateur retourne un chemin de fichier
                                     if path_pdf and os.path.exists(path_pdf):
                                         with open(path_pdf, "rb") as f:
                                             pdf_bytes = f.read()
+                                    
                                         try:
                                             os.remove(path_pdf)
-                                        except:
+                                        except Exception:
                                             pass
-
+                                    
+                                    # Téléchargement
                                     if pdf_bytes:
                                         st.download_button(
-                                            label=f"💾 Cliquez ici pour enregistrer",
+                                            label="💾 Cliquez ici pour enregistrer",
                                             data=pdf_bytes,
                                             file_name=f"{type_doc}_{ref_doc}.pdf",
                                             mime="application/pdf",
-                                            use_container_width=True
+                                            use_container_width=True,
+                                            key=f"download_pdf_{id_doc}"
                                         )
                                     else:
-                                        st.error("❌ Impossible de générer le fichier PDF.")
-
-                                except Exception as e:
-                                    st.error(f"❌ Erreur de génération : {e}")
+                                        st.error(
+                                            "❌ Impossible de récupérer le PDF. "
+                                            "Vérifie le retour de generer_bon_paiement_pdf()."
+                                        )   
         # ==========================================
         # TAB 3 : RÈGLEMENT DES DETTES
         # ==========================================
