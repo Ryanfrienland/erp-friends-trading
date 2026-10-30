@@ -4887,9 +4887,19 @@ elif choix == "🧾 Achats (Entrees)":
                             
                             # On récupère l'ID de l'achat pour trouver les comptes du fournisseur
                             id_achat_temp = None
+
                             if ref_doc:
-                                if ref_doc.startswith("PAY-") and len(ref_doc.split('-')) > 1:
-                                    id_achat_temp = int(ref_doc.split('-')[1])
+                                # Un préfinancement n'est pas un achat
+                                if ref_doc.startswith("PAY-PREF-"):
+                                    id_achat_temp = None
+                            
+                                # Bon de paiement d'un achat classique
+                                elif ref_doc.startswith("PAY-"):
+                                    match = re.match(r"^PAY-(\d+)(?:-|$)", ref_doc)
+                                    if match:
+                                        id_achat_temp = int(match.group(1))
+                            
+                                # Règlement de dette
                                 elif ref_doc.startswith("REG-"):
                                     match = re.search(r"REG-(\d+)-", ref_doc)
                                     if match:
@@ -4929,11 +4939,157 @@ elif choix == "🧾 Achats (Entrees)":
                                         res_cachet = fetch_one("SELECT fichier_cachet FROM cachets_direction WHERE role_signataire = 'DG'")
                                         cachet_a_utiliser = res_cachet[0] if res_cachet else None
 
-                                    row = fetch_one("""
-                                        SELECT a.id, a.numero_de_lot, f.nom, a.quantite_kg, a.prix_unitaire, 
-                                               a.total, a.montant_avance, a.numero_contrat, a.poids_net, a.deductions, a.libelle_deductions
-                                        FROM achats a JOIN fournisseurs f ON a.id_fournisseur = f.id WHERE a.id = %s
-                                    """, (id_achat_temp,))
+
+                                    
+                                    row_code = fetch_one("""
+                                        SELECT code_verification, montant
+                                        FROM documents_generes
+                                        WHERE id = %s
+                                    """, (id_doc,))
+                                    
+                                    code_verif = row_code[0] if row_code else None
+                                    montant_doc = float(row_code[1] or 0) if row_code else 0.0
+                                    
+                                    # =====================================================
+                                    # CAS 1 : BON DE PAIEMENT D'UN PREFINANCEMENT
+                                    # =====================================================
+                                    if ref_doc.startswith("PAY-PREF-"):
+                                    
+                                        ref_pref = ref_doc.replace("PAY-", "", 1)
+                                    
+                                        pref_data = fetch_one("""
+                                            SELECT
+                                                pf.id,
+                                                f.nom,
+                                                pf.montant_accorde,
+                                                pf.numero_contrat,
+                                                pf.observations
+                                            FROM prefinancements_fournisseurs pf
+                                            JOIN fournisseurs f ON f.id = pf.id_fournisseur
+                                            WHERE pf.reference = %s
+                                        """, (ref_pref,))
+                                    
+                                        if not pref_data:
+                                            st.error(f"Préfinancement introuvable : {ref_pref}")
+                                            st.stop()
+                                    
+                                        data_paiement = {
+                                            "num_paiement": ref_doc,
+                                            "date": datetime.now().strftime("%d/%m/%Y"),
+                                            "fournisseur": pref_data[1],
+                                            "num_lot": "N/A - PREFINANCEMENT",
+                                            "num_contrat": pref_data[3] or "Avance générale",
+                                            "quantite_kg": 0.0,
+                                            "prix_unitaire": 0.0,
+                                            "total": float(pref_data[2] or 0),
+                                            "poids_net": 0.0,
+                                            "deductions": 0.0,
+                                            "libelle_deductions": "Aucune",
+                                            "mode_reglement": "Virement bancaire",
+                                            "code_verification": code_verif,
+                                            "montant_regle": montant_doc,
+                                            "versement": montant_doc,
+                                            "reste": 0.0,
+                                            "num_compte": compte_a_utiliser
+                                        }
+                                    
+                                        res_pdf = generer_bon_paiement_pdf(
+                                            data_paiement=data_paiement,
+                                            type_document=type_doc,
+                                            signataire=signataire_doc or "DG",
+                                            cachet_blob=cachet_a_utiliser
+                                        )
+                                    
+                                    # =====================================================
+                                    # CAS 2 : BON DE PAIEMENT D'UN ACHAT CLASSIQUE
+                                    # =====================================================
+                                    else:
+                                    
+                                        if not id_achat_temp:
+                                            st.error(
+                                                f"Impossible de retrouver l'achat associé à {ref_doc}."
+                                            )
+                                            st.stop()
+                                    
+                                        row = fetch_one("""
+                                            SELECT
+                                                a.id,
+                                                a.numero_de_lot,
+                                                f.nom,
+                                                a.quantite_kg,
+                                                a.prix_unitaire,
+                                                a.total,
+                                                a.montant_avance,
+                                                a.numero_contrat,
+                                                a.poids_net,
+                                                a.deductions,
+                                                a.libelle_deductions
+                                            FROM achats a
+                                            JOIN fournisseurs f ON a.id_fournisseur = f.id
+                                            WHERE a.id = %s
+                                        """, (id_achat_temp,))
+                                    
+                                        if not row:
+                                            st.error("Achat introuvable.")
+                                            st.stop()
+                                    
+                                        total_achat = float(row[5] or 0)
+                                        avance_actuelle = float(row[6] or 0)
+                                    
+                                        data_paiement = {
+                                            "num_paiement": ref_doc,
+                                            "date": datetime.now().strftime("%d/%m/%Y"),
+                                            "fournisseur": row[2],
+                                            "num_lot": row[1],
+                                            "num_contrat": row[7] or "N/A",
+                                            "quantite_kg": float(row[3] or 0),
+                                            "prix_unitaire": float(row[4] or 0),
+                                            "total": total_achat,
+                                            "poids_net": float(row[8] or 0),
+                                            "deductions": float(row[9] or 0),
+                                            "libelle_deductions": row[10] or "",
+                                            "mode_reglement": "Virement bancaire",
+                                            "code_verification": code_verif,
+                                            "montant_regle": montant_doc,
+                                            "num_compte": compte_a_utiliser
+                                        }
+                                    
+                                        if type_doc == "reglement_dette":
+                                            avance_avant = max(0.0, avance_actuelle - montant_doc)
+                                            dette_initiale = max(0.0, total_achat - avance_avant)
+                                    
+                                            data_paiement["dette_initiale"] = dette_initiale
+                                            data_paiement["versement"] = montant_doc
+                                            data_paiement["reste"] = max(
+                                                0.0, dette_initiale - montant_doc
+                                            )
+                                    
+                                        elif type_doc in [
+                                            "bon_paiement",
+                                            "bon_caisse",
+                                            "engagement_dette"
+                                        ]:
+                                            data_paiement["versement"] = (
+                                                montant_doc if montant_doc > 0 else avance_actuelle
+                                            )
+                                            data_paiement["reste"] = max(
+                                                0.0, total_achat - avance_actuelle
+                                            )
+                                    
+                                        else:
+                                            data_paiement["versement"] = avance_actuelle
+                                            data_paiement["reste"] = max(
+                                                0.0, total_achat - avance_actuelle
+                                            )
+                                    
+                                        res_pdf = generer_bon_paiement_pdf(
+                                            data_paiement=data_paiement,
+                                            type_document=type_doc,
+                                            signataire=signataire_doc or "DG",
+                                            cachet_blob=cachet_a_utiliser
+                                        )
+
+                                        
 
                                     if not row:
                                         st.error("❌ Achat introuvable.")
