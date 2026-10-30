@@ -1210,27 +1210,76 @@ def generer_bon_paiement_pdf(
     pdf.set_y(max(curr_y_gauche, curr_y_droite) + 6)
 
     # 3. TABLEAU 1 : DÉTAILS DE LA MARCHANDISE
+    #    ⚠️ CAS SPÉCIAL : PRÉFINANCEMENT (pas de lot de cacao, pas de quantité)
+    is_prefinancement = (
+        (num_lot and "PREFINANCEMENT" in str(num_lot).upper())
+        or str(num_bon).startswith("PAY-PREF-")
+    )
+
     _set_font_safely(pdf, "B", 10)
     pdf.set_fill_color(230, 245, 230)
     pdf.set_draw_color(120, 120, 120)
 
-    pdf.cell(70, 8, " DESIGNATION", border=1, fill=True, align="L")
-    pdf.cell(40, 8, "PRIX / KG", border=1, fill=True, align="C")
-    pdf.cell(40, 8, "QUANTITE", border=1, fill=True, align="C")
-    pdf.cell(40, 8, "MONTANT BRUT", border=1, fill=True, align="C")
-    pdf.ln()
+    if is_prefinancement:
+        # ---- Tableau adapté au préfinancement ----
+        pdf.cell(110, 8, " DESIGNATION DE L'AVANCE", border=1, fill=True, align="L")
+        pdf.cell(70, 8, "MONTANT (FCFA)", border=1, fill=True, align="C")
+        pdf.ln()
 
-    _set_font_safely(pdf, "", 10)
-    prefix_desig = (
-        "Règlement Reliquat -"
-        if type_document == "reglement_dette"
-        else "Achat Cacao -"
-    )
-    designation_text = f" {prefix_desig} Lot N° {num_lot}"
-    pdf.cell(70, 8, _clean_text(designation_text), border=1, align="L")
-    pdf.cell(40, 8, f"{pu:,.0f} FCFA", border=1, align="C")
-    pdf.cell(40, 8, f"{qte:,.2f} kg", border=1, align="C")
-    pdf.cell(40, 8, f"{valeur_brute:,.0f} FCFA", border=1, ln=1, align="C")
+        _set_font_safely(pdf, "", 10)
+        pdf.cell(110, 8, _clean_text(" Avance financière sur contrat fournisseur"),
+                 border=1, align="L")
+        pdf.cell(70, 8, f"{float(data_paiement.get('total', 0)):,.0f}",
+                 border=1, ln=1, align="C")
+
+        # Ligne contrat lié
+        if num_contrat and num_contrat not in ("______", "N/A", ""):
+            _set_font_safely(pdf, "I", 9)
+            pdf.set_fill_color(245, 245, 245)
+            pdf.cell(180, 7, _clean_text(f" Contrat lié : {num_contrat}"),
+                     border=1, fill=True, ln=1)
+
+        # Ligne observations
+        obs = data_paiement.get("observations") or ""
+        if obs:
+            _set_font_safely(pdf, "I", 8)
+            pdf.multi_cell(180, 5, _clean_text(f" Observations : {obs}"), border=1, align="L")
+
+        pdf.ln(3)
+
+        # Sous-total simplifié
+        _set_font_safely(pdf, "B", 10)
+        pdf.set_fill_color(245, 245, 245)
+        pdf.cell(150, 7, "MONTANT DE L'AVANCE : ", border=1, fill=True, align="R")
+        pdf.cell(30, 7, f"{float(data_paiement.get('total', 0)):,.0f} FCFA ",
+                 border=1, ln=1, fill=True, align="R")
+    else:
+        # ---- Tableau classique (achat de cacao) ----
+        pdf.cell(70, 8, " DESIGNATION", border=1, fill=True, align="L")
+        pdf.cell(40, 8, "PRIX / KG", border=1, fill=True, align="C")
+        pdf.cell(40, 8, "QUANTITE", border=1, fill=True, align="C")
+        pdf.cell(40, 8, "MONTANT BRUT", border=1, fill=True, align="C")
+        pdf.ln()
+
+        _set_font_safely(pdf, "", 10)
+        prefix_desig = (
+            "Règlement Reliquat -"
+            if type_document == "reglement_dette"
+            else "Achat Cacao -"
+        )
+        designation_text = f" {prefix_desig} Lot N° {num_lot}"
+        pdf.cell(70, 8, _clean_text(designation_text), border=1, align="L")
+        pdf.cell(40, 8, f"{pu:,.0f} FCFA", border=1, align="C")
+        pdf.cell(40, 8, f"{qte:,.2f} kg", border=1, align="C")
+        pdf.cell(40, 8, f"{valeur_brute:,.0f} FCFA", border=1, ln=1, align="C")
+
+        # SOUS-TOTAL (uniquement pour les achats)
+        pdf.set_fill_color(245, 245, 245)
+        _set_font_safely(pdf, "B", 10)
+        pdf.cell(150, 7, "POIDS NET : ", border=1, fill=True, align="R")
+        pdf.cell(40, 7, f"{poids_net} kg ", border=1, ln=1, fill=True, align="R")
+        pdf.cell(150, 7, "VALEUR DU LOT BRUT : ", border=1, fill=True, align="R")
+        pdf.cell(40, 7, f"{valeur_brute:,.0f} FCFA ", border=1, ln=1, fill=True, align="R")
 
     # SOUS-TOTAL
     pdf.set_fill_color(245, 245, 245)
@@ -1244,6 +1293,13 @@ def generer_bon_paiement_pdf(
     pdf.ln(5)
 
     # 4. TABLEAU 2 : SITUATION FINANCIÈRE PERSONNALISÉE
+    #    ⚠️ Détection : préfinancement = pas de lot de cacao, juste une avance
+    is_prefinancement = (
+        (num_lot and "PREFINANCEMENT" in str(num_lot).upper())
+        or (num_lot and "PRÉFINANCEMENT" in str(num_lot).upper())
+        or str(num_bon).startswith("PAY-PREF-")
+    )
+
     _set_font_safely(pdf, "B", 11)
     pdf.cell(0, 6, _clean_text("SITUATION COMPTABLE ET RÈGLEMENT"), ln=1)
     pdf.ln(2)
@@ -1257,51 +1313,50 @@ def generer_bon_paiement_pdf(
     montant_cible_lettres = 0
 
     # ==================== CAS 1 : BON DE PAIEMENT (ACOMPTE SEUL) ====================
-    # ==================== CAS 1 : BON DE PAIEMENT (ACOMPTE SEUL) ====================
     if type_document == "bon_paiement" or type_document == "bon_caisse":
-        _set_font_safely(pdf, "", 10)
-        pdf.cell(110, 7, " Valeur Totale Cacao (Brut)", border=1, align="L")
-        pdf.cell(40, 7, "100.0 %", border=1, align="C")
-        pdf.cell(40, 7, f"{valeur_brute:,.0f} ", border=1, ln=1, align="R")
 
-        base_calcul = valeur_brute
-        if deductions > 0:
-            pct_deduct = (deductions / valeur_brute * 100) if valeur_brute > 0 else 0.0
-            pdf.set_fill_color(253, 244, 245)
-            _set_font_safely(pdf, "I", 10)
-            pdf.cell(
-                110,
-                7,
-                f" - {libelle_deductions} (Déduction)",
-                border=1,
-                fill=True,
-                align="L",
-            )
-            pdf.cell(
-                40, 7, f"-{pct_deduct:.1f} %", border=1, fill=True, align="C"
-            )
-            pdf.cell(
-                40, 7, f"-{deductions:,.0f} ", border=1, ln=1, fill=True, align="R"
-            )
-            base_calcul = valeur_brute - deductions
+        if is_prefinancement:
+            # ---------- Branche PRÉFINANCEMENT : pas de cacao, juste une avance ----------
+            montant_avance = float(data_paiement.get("total", 0) or 0)
 
-        pct_avance = (
-            (versement / base_calcul * 100) if base_calcul > 0 else 0.0
-        )
-        pdf.set_fill_color(230, 245, 230)
-        _set_font_safely(pdf, "B", 10)
-        pdf.cell(
-            110,
-            8,
-            " ACOMPTE VERSÉ CE JOUR (CASH)",
-            border=1,
-            fill=True,
-            align="L",
-        )
-        pdf.cell(40, 8, f"{pct_avance:.1f} %", border=1, fill=True, align="C")
-        pdf.cell(40, 8, f"{versement:,.0f} ", border=1, ln=1, fill=True, align="R")
+            _set_font_safely(pdf, "", 10)
+            pdf.cell(110, 7, " Montant de l'avance accordée", border=1, align="L")
+            pdf.cell(40, 7, "100.0 %", border=1, align="C")
+            pdf.cell(40, 7, f"{montant_avance:,.0f} ", border=1, ln=1, align="R")
 
-        montant_cible_lettres = versement
+            pdf.set_fill_color(230, 245, 230)
+            _set_font_safely(pdf, "B", 10)
+            pdf.cell(110, 8, " AVANCE À VERSER AU FOURNISSEUR", border=1, fill=True, align="L")
+            pdf.cell(40, 8, "100.0 %", border=1, fill=True, align="C")
+            pdf.cell(40, 8, f"{montant_avance:,.0f} ", border=1, ln=1, fill=True, align="R")
+
+            montant_cible_lettres = montant_avance
+
+        else:
+            # ---------- Branche ACHAT CLASSIQUE (comportement d'origine) ----------
+            _set_font_safely(pdf, "", 10)
+            pdf.cell(110, 7, " Valeur Totale Cacao (Brut)", border=1, align="L")
+            pdf.cell(40, 7, "100.0 %", border=1, align="C")
+            pdf.cell(40, 7, f"{valeur_brute:,.0f} ", border=1, ln=1, align="R")
+
+            base_calcul = valeur_brute
+            if deductions > 0:
+                pct_deduct = (deductions / valeur_brute * 100) if valeur_brute > 0 else 0.0
+                pdf.set_fill_color(253, 244, 245)
+                _set_font_safely(pdf, "I", 10)
+                pdf.cell(110, 7, f" - {libelle_deductions} (Déduction)", border=1, fill=True, align="L")
+                pdf.cell(40, 7, f"-{pct_deduct:.1f} %", border=1, fill=True, align="C")
+                pdf.cell(40, 7, f"-{deductions:,.0f} ", border=1, ln=1, fill=True, align="R")
+                base_calcul = valeur_brute - deductions
+
+            pct_avance = (versement / base_calcul * 100) if base_calcul > 0 else 0.0
+            pdf.set_fill_color(230, 245, 230)
+            _set_font_safely(pdf, "B", 10)
+            pdf.cell(110, 8, " ACOMPTE VERSÉ CE JOUR (CASH)", border=1, fill=True, align="L")
+            pdf.cell(40, 8, f"{pct_avance:.1f} %", border=1, fill=True, align="C")
+            pdf.cell(40, 8, f"{versement:,.0f} ", border=1, ln=1, fill=True, align="R")
+
+            montant_cible_lettres = versement
 
     # ==================== CAS 2 : ENGAGEMENT DE RÈGLEMENT (RESTE A PAYER) ====================
     elif type_document == "engagement_dette":
@@ -11448,11 +11503,12 @@ elif choix == "👑 Espace Direction":
                                     """, (ref_pref,))
                                     
                                     if pref_data:
+                                        # pref_data = (id, nom, montant, numero_contrat, observations)
                                         data_p = {
                                             "num_paiement": doc_ref,
                                             "date": datetime.now().strftime('%d/%m/%Y'),
                                             "fournisseur": pref_data[1],
-                                            "num_lot": "N/A (Préfinancement)",
+                                            "num_lot": "PREFINANCEMENT",
                                             "num_contrat": pref_data[3] or "Avance Générale",
                                             "quantite_kg": 0.0,
                                             "prix_unitaire": 0.0,
@@ -11463,6 +11519,9 @@ elif choix == "👑 Espace Direction":
                                             "versement": float(pref_data[2]),
                                             "reste": 0.0,
                                             "mode_reglement": "Virement bancaire",
+                                            "code_verification": code_verif,
+                                            "code_verif": code_verif,
+                                            "observations": pref_data[4] or "",   # ← AJOUT
                                         }
                                         res = generer_bon_paiement_pdf(data_p, type_document='bon_paiement')
                                         pdf_bytes = res[1] if isinstance(res, tuple) else res
