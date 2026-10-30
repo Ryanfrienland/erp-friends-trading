@@ -5194,6 +5194,8 @@ elif choix == "🧾 Achats (Entrees)":
                                             "❌ Impossible de récupérer le PDF. "
                                             "Vérifie le retour de generer_bon_paiement_pdf()."
                                         )   
+                                except Exception as e:
+                                    st.error(f"❌ Erreur de génération : {e}")               
         # ==========================================
         # TAB 3 : RÈGLEMENT DES DETTES
         # ==========================================
