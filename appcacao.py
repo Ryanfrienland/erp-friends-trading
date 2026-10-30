@@ -4866,66 +4866,92 @@ elif choix == "🧾 Achats (Entrees)":
             with col_dl:
                 with st.container(border=True):
                     st.subheader("2. Télécharger les validés")
+            
                     df_valides = get_dataframe_from_query(
-                        "SELECT id, type_doc, reference, montant, demandeur, description, statut FROM documents_generes WHERE statut = 'VALIDE' ORDER BY id DESC"
+                        """
+                        SELECT id, type_doc, reference, montant, demandeur,
+                               description, statut
+                        FROM documents_generes
+                        WHERE statut = 'VALIDE'
+                        ORDER BY id DESC
+                        """
                     )
-
+            
                     if df_valides.empty:
                         st.info("ℹ️ Aucun document validé disponible.")
+            
                     else:
                         doc_sel = st.selectbox(
-                            "Sélectionner un document PDF :", df_valides.values.tolist(),
+                            "Sélectionner un document PDF :",
+                            df_valides.values.tolist(),
                             format_func=lambda x: f"[{x[1].upper()}] Réf: {x[2]}"
                         )
-
+            
                         if doc_sel:
                             id_doc, type_doc, ref_doc = doc_sel[0], doc_sel[1], doc_sel[2]
-                            
-                            # 👇 AJOUT : Sélection du compte bancaire avant génération
+            
+                            # =====================================================
+                            # SÉLECTION DU COMPTE BANCAIRE
+                            # =====================================================
                             st.markdown("---")
                             st.markdown("**🏦 Choix du compte bancaire pour le PDF**")
-                            
-                            # On récupère l'ID de l'achat pour trouver les comptes du fournisseur
+            
                             id_achat_temp = None
-
+            
                             if ref_doc:
-                                # Un préfinancement n'est pas un achat
                                 if ref_doc.startswith("PAY-PREF-"):
                                     id_achat_temp = None
-                            
-                                # Bon de paiement d'un achat classique
+            
                                 elif ref_doc.startswith("PAY-"):
                                     match = re.match(r"^PAY-(\d+)(?:-|$)", ref_doc)
                                     if match:
                                         id_achat_temp = int(match.group(1))
-                            
-                                # Règlement de dette
+            
                                 elif ref_doc.startswith("REG-"):
                                     match = re.search(r"REG-(\d+)-", ref_doc)
                                     if match:
                                         id_achat_temp = int(match.group(1))
-                            
+            
                             compte_a_utiliser = "N/A"
+            
                             if id_achat_temp:
-                                id_f_temp_row = fetch_one("SELECT id_fournisseur FROM achats WHERE id = %s", (id_achat_temp,))
+                                id_f_temp_row = fetch_one(
+                                    "SELECT id_fournisseur FROM achats WHERE id = %s",
+                                    (id_achat_temp,)
+                                )
+            
                                 if id_f_temp_row:
                                     id_f_temp = id_f_temp_row[0]
+            
                                     comptes_dispo = fetch_all(
-    """
-    SELECT numero_compte, nom_institution
-    FROM comptes_fournisseurs
-    WHERE id_fournisseur = %s
-    """,
-    (id_f_temp,)
-)
-
+                                        """
+                                        SELECT numero_compte, nom_institution
+                                        FROM comptes_fournisseurs
+                                        WHERE id_fournisseur = %s
+                                        """,
+                                        (id_f_temp,)
+                                    )
+            
                                     if comptes_dispo:
-                                        options_comptes = [f"{c[0]} ({c[1]})" for c in comptes_dispo]
-                                        compte_a_utiliser = st.selectbox("Sélectionner le compte à afficher sur le PDF :", options_comptes)
+                                        options_comptes = [
+                                            f"{c[0]} ({c[1]})" for c in comptes_dispo
+                                        ]
+            
+                                        compte_a_utiliser = st.selectbox(
+                                            "Sélectionner le compte à afficher sur le PDF :",
+                                            options_comptes,
+                                            key=f"compte_pdf_{id_doc}"
+                                        )
                                     else:
-                                        st.warning("Aucun compte secondaire trouvé pour ce fournisseur. Le compte principal sera utilisé.")
-
-                           if st.button(
+                                        st.warning(
+                                            "Aucun compte secondaire trouvé pour ce fournisseur. "
+                                            "Le compte principal sera utilisé."
+                                        )
+            
+                            # =====================================================
+                            # GÉNÉRATION DU PDF
+                            # =====================================================
+                            if st.button(
                                 "🖨️ Générer le PDF",
                                 type="primary",
                                 use_container_width=True,
@@ -4935,28 +4961,54 @@ elif choix == "🧾 Achats (Entrees)":
                                     res_pdf = None
                                     pdf_bytes = None
                                     path_pdf = None
-                                    row_sign = fetch_one("SELECT signataire FROM documents_generes WHERE id = %s", (id_doc,))
+            
+                                    row_sign = fetch_one(
+                                        "SELECT signataire FROM documents_generes WHERE id = %s",
+                                        (id_doc,)
+                                    )
                                     signataire_doc = row_sign[0] if row_sign else None
-
+            
                                     cachet_a_utiliser = None
+            
                                     if signataire_doc:
-                                        res_cachet = fetch_one("SELECT fichier_cachet FROM cachets_direction WHERE role_signataire = %s", (signataire_doc,))
-                                        cachet_a_utiliser = res_cachet[0] if res_cachet else None
-
+                                        res_cachet = fetch_one(
+                                            """
+                                            SELECT fichier_cachet
+                                            FROM cachets_direction
+                                            WHERE role_signataire = %s
+                                            """,
+                                            (signataire_doc,)
+                                        )
+                                        cachet_a_utiliser = (
+                                            res_cachet[0] if res_cachet else None
+                                        )
+            
                                     if not cachet_a_utiliser:
-                                        res_cachet = fetch_one("SELECT fichier_cachet FROM cachets_direction WHERE role_signataire = 'DG'")
-                                        cachet_a_utiliser = res_cachet[0] if res_cachet else None
-
-
-                                    
-                                    row_code = fetch_one("""
+                                        res_cachet = fetch_one(
+                                            """
+                                            SELECT fichier_cachet
+                                            FROM cachets_direction
+                                            WHERE role_signataire = 'DG'
+                                            """
+                                        )
+                                        cachet_a_utiliser = (
+                                            res_cachet[0] if res_cachet else None
+                                        )
+            
+                                    row_code = fetch_one(
+                                        """
                                         SELECT code_verification, montant
                                         FROM documents_generes
                                         WHERE id = %s
-                                    """, (id_doc,))
-                                    
+                                        """,
+                                        (id_doc,)
+                                    )
+            
                                     code_verif = row_code[0] if row_code else None
-                                    montant_doc = float(row_code[1] or 0) if row_code else 0.0
+                                    montant_doc = (
+                                        float(row_code[1] or 0) if row_code else 0.0
+                                    )
+
                                     
                                     # =====================================================
                                     # CAS 1 : BON DE PAIEMENT D'UN PREFINANCEMENT
