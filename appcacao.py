@@ -341,6 +341,16 @@ def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str,
     # ✅ On encode l'URL de vérification, pas juste REF|CODE
     contenu_qr = _url_verification(reference, code_verification)
     qr_img = generer_qr_code(contenu_qr, taille=160)
+    # =========================================================
+    # COORDONNÉES QR CODE — BONS DE PAIEMENT
+    # =========================================================
+    # Ces coordonnées positionnent le QR code dans le coin supérieur
+    # droit du PDF (format A4, unités = points ReportLab, 1mm ≈ 2.83 pts)
+    QR_BON_PAIEMENT = {
+        "x_qr": 45,        # Position horizontale (≈ 170 mm depuis la gauche)
+        "y_qr": 170,        # Position verticale (≈ 254 mm depuis le bas)
+        "largeur_qr": 70,   # Taille du QR code (≈ 25 mm)
+    }                        
 
     overlay_buffer = BytesIO()
     c = canvas.Canvas(overlay_buffer, pagesize=A4)
@@ -363,6 +373,7 @@ def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str,
     resultat = BytesIO()
     writer.write(resultat)
     return resultat.getvalue()
+
 
     
 def convertir_df_csv(df):
