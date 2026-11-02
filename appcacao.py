@@ -11849,34 +11849,37 @@ elif choix == "👑 Espace Direction":
                                                             pdf_bytes = f.read()
                                                         os.remove(nom_fichier)
 
-                                        # 3. Appliquer le QR code
-                                        # (On s'assure que le code est bien généré AVANT de l'apposer)
-                                        code_verif = generer_code_verification() 
+                                    
+                                        # 3. GÉNÉRATION DU CODE + APPLICATION DU QR CODE
+                                        # =====================================================
+                                        code_verif = generer_code_verification()
                                         
-                                        if pdf_bytes:
-                                            if doc_type == 'contrat_transport':
-                                                g = _geometrie_transport()
-                                                pdf_bytes_final = apposer_qr_sur_pdf(
-                                                    pdf_bytes, code_verif, row['reference'],
-                                                    x_qr=g["qr_x_pt"], y_qr=g["qr_y_pt"],
-                                                    largeur_qr=g["qr_size_pt"]
-                                                )
-                                            elif doc_type in ['bon_paiement', 'bon_caisse', 'engagement_dette', 'reglement_dette', 'acompte']:
-                                                # Coordonnées spécifiques pour les bons de paiement
-                                                # Position : en haut à droite, à côté du titre
-                                                pdf_bytes_final = apposer_qr_sur_pdf(
-                                                    pdf_bytes, code_verif, row['reference'],
-                                                    x_qr=470, y_qr=730, largeur_qr=60
-                                                )
-                                            else:
-                                                pdf_bytes_final = apposer_qr_sur_pdf(pdf_bytes, code_verif, row['reference'])
-                                            
-                                            # ✅ C'EST ICI QU'ON CALCULE LE HASH (après avoir apposé le QR code)
-                                            hash_final = calculer_hash_pdf(pdf_bytes_final)
+                                        # On s'assure que pdf_bytes existe
+                                        if not pdf_bytes:
+                                            raise Exception("Le PDF de base n'a pas été généré correctement.")
+                                        
+                                        # Application du QR code selon le type de document
+                                        if doc_type == 'contrat_transport':
+                                            g = _geometrie_transport()
+                                            pdf_bytes_final = apposer_qr_sur_pdf(
+                                                pdf_bytes, code_verif, row['reference'],
+                                                x_qr=g["qr_x_pt"], y_qr=g["qr_y_pt"],
+                                                largeur_qr=g["qr_size_pt"]
+                                            )
+                                        elif doc_type in ['bon_paiement', 'bon_caisse', 'engagement_dette', 'reglement_dette', 'acompte']:
+                                            # Coordonnées spécifiques pour les bons de paiement (en haut à droite)
+                                            pdf_bytes_final = apposer_qr_sur_pdf(
+                                                pdf_bytes, code_verif, row['reference'],
+                                                x_qr=470, y_qr=730, largeur_qr=60
+                                            )
                                         else:
-                                            raise Exception("Impossible de générer le PDF avec cachet")
+                                            pdf_bytes_final = apposer_qr_sur_pdf(pdf_bytes, code_verif, row['reference'])
+                                        
+                                        # Calcul du hash APRÈS avoir apposé le QR code
+                                        hash_final = calculer_hash_pdf(pdf_bytes_final)
 
-                                        # 4. Mise à jour en base (DANS LE WITH CURSOR)
+                                        # 4. MISE À JOUR EN BASE
+                                        # =====================================================
                                         with conn.cursor() as cur:
                                             cur.execute("""
                                                 UPDATE documents_generes
@@ -11905,52 +11908,6 @@ elif choix == "👑 Espace Direction":
                                                     WHERE numero_contrat = %s
                                                 """, (role_signataire, row['reference']))
                                                 
-                                            # 🆕 Si c'est un bon de paiement lié à un préfinancement, on le valide aussi
-                                            if row['type_doc'] == 'bon_paiement' and row['reference'].startswith('PAY-PREF-'):
-                                                ref_pref = row['reference'].replace('PAY-', '')
-                                                cur.execute("""
-                                                    UPDATE prefinancements_fournisseurs
-                                                    SET statut = 'VALIDE',
-                                                        valide_par = %s,
-                                                        date_validation = CURRENT_TIMESTAMP
-                                                    WHERE reference = %s
-                                                """, (role_signataire, ref_pref))
-                                                
-                                            conn.commit()
-                                            
-                                        st.toast(f"✅ Document {row['reference']} validé et authentifié (code: {code_verif})", icon="✅")
-                                        st.rerun()
-
-                                        # 4. Mise à jour en base (DANS LE WITH CURSOR)
-                                        with conn.cursor() as cur:
-                                            cur.execute("""
-                                                UPDATE documents_generes
-                                                SET statut = 'VALIDE',
-                                                  signataire = %s,
-                                                  date_signature = CURRENT_TIMESTAMP,
-                                                  pdf_hash = %s,
-                                                  code_verification = %s,
-                                                  fichier_pdf = %s
-                                                WHERE id = %s
-                                            """, (role_signataire, hash_final, code_verif, pdf_bytes_final, row['id']))
-                                            
-                                            if doc_type == "contrat_transport":
-                                                cur.execute("""
-                                                    UPDATE contrats_transport
-                                                    SET statut = 'VALIDE',
-                                                        signataire = %s,
-                                                        date_signature = CURRENT_TIMESTAMP
-                                                    WHERE numero_contrat = %s
-                                                """, (role_signataire, doc_ref))
-                                                
-                                            if row['type_doc'] == 'contrat':
-                                                cur.execute("""
-                                                    UPDATE contrats
-                                                    SET statut = 'VALIDE', signataire = %s, date_signature = CURRENT_TIMESTAMP
-                                                    WHERE numero_contrat = %s
-                                                """, (role_signataire, row['reference']))
-                                                
-                                            # 🆕 Si c'est un bon de paiement lié à un préfinancement, on le valide aussi
                                             if row['type_doc'] == 'bon_paiement' and row['reference'].startswith('PAY-PREF-'):
                                                 ref_pref = row['reference'].replace('PAY-', '')
                                                 cur.execute("""
@@ -11980,6 +11937,8 @@ elif choix == "👑 Espace Direction":
                                         st.error(
                                             f"❌ Échec de validation : {e}"
                                         )
+
+
 
                             with col_b2:
                                 if st.button("❌ Rejeter", key=f"btn_reject_{row['id']}", use_container_width=True):
