@@ -371,9 +371,9 @@ def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str,
 # Ces valeurs sont dépliées via **QR_BON_PAIEMENT lors de l'appel.
 # A4 = 595 x 842 points. Origine en bas à gauche.
 QR_BON_PAIEMENT = {
-    "x_qr": 480,        # ≈ 170 mm depuis la gauche (bord droit)
-    "y_qr": 720,        # ≈ 254 mm depuis le bas (haut de page)
-    "largeur_qr": 70,   # ≈ 25 mm
+    "x_qr": 440,        # ≈ 170 mm depuis la gauche (bord droit)
+    "y_qr": 790,        # ≈ 254 mm depuis le bas (haut de page)
+    "largeur_qr": 50,   # ≈ 25 mm
 }    
 def convertir_df_csv(df):
     return df.to_csv(index=False).encode("utf-8")
