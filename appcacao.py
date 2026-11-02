@@ -11495,33 +11495,38 @@ elif choix == "👑 Espace Direction":
                                 # 🆕 CAS SPÉCIAL : BON DE PAIEMENT POUR PRÉFINANCEMENT
                                 if doc_ref.startswith("PAY-PREF-"):
                                     ref_pref = doc_ref.replace("PAY-", "")
+                                    
+                                    # On récupère les infos du préfinancement ET du contrat lié
                                     pref_data = fetch_one("""
-                                        SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations
+                                        SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations,
+                                               c.quantite_prevue, c.prix_unitaire
                                         FROM prefinancements_fournisseurs pf
                                         JOIN fournisseurs f ON pf.id_fournisseur = f.id
+                                        LEFT JOIN contrats c ON pf.numero_contrat = c.numero_contrat
                                         WHERE pf.reference = %s
                                     """, (ref_pref,))
                                     
                                     if pref_data:
-                                        # pref_data = (id, nom, montant, numero_contrat, observations)
+                                        # On prépare les données pour le PDF
                                         data_p = {
                                             "num_paiement": doc_ref,
                                             "date": datetime.now().strftime('%d/%m/%Y'),
                                             "fournisseur": pref_data[1],
-                                            "num_lot": "PREFINANCEMENT",
+                                            "num_lot": "N/A - PREFINANCEMENT",
                                             "num_contrat": pref_data[3] or "Avance Générale",
-                                            "quantite_kg": 0.0,
-                                            "prix_unitaire": 0.0,
-                                            "total": float(pref_data[2]),
-                                            "poids_net": 0.0,
+                                            "quantite_kg": float(pref_data[5] or 0), # Récupéré du contrat
+                                            "prix_unitaire": float(pref_data[6] or 0), # Récupéré du contrat
+                                            "total": float(pref_data[2]), # Montant du préfinancement
+                                            "poids_net": float(pref_data[5] or 0), # Récupéré du contrat
                                             "deductions": 0.0,
                                             "libelle_deductions": "Aucune",
                                             "versement": float(pref_data[2]),
                                             "reste": 0.0,
                                             "mode_reglement": "Virement bancaire",
-                                            "code_verification": code_verif,
-                                            "code_verif": code_verif,
-                                            "observations": pref_data[4] or "",   # ← AJOUT
+                                            "observations": pref_data[4] or "",
+                                            # On génère un code temporaire pour l'aperçu, il sera écrasé à la validation
+                                            "code_verification": "APERCU-TEMP", 
+                                            "code_verif": "APERCU-TEMP"
                                         }
                                         res = generer_bon_paiement_pdf(data_p, type_document='bon_paiement')
                                         pdf_bytes = res[1] if isinstance(res, tuple) else res
@@ -11875,6 +11880,9 @@ elif choix == "👑 Espace Direction":
                                                         os.remove(nom_fichier)
 
                                         # 3. Appliquer le QR code
+                                        # (On s'assure que le code est bien généré AVANT de l'apposer)
+                                        code_verif = generer_code_verification() 
+                                        
                                         if pdf_bytes:
                                             if doc_type == 'contrat_transport':
                                                 g = _geometrie_transport()
