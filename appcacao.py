@@ -11731,7 +11731,7 @@ elif choix == "👑 Espace Direction":
                                                 # ✅ On ajoute la jointure avec la table 'contrats' pour récupérer 'quantite_prevue' et 'prix_unitaire'
                                                 pref_data = fetch_one("""
                                                     SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations,
-                                                           c.quantite_prevue, c.prix_unitaire
+                                                           c.quantite_prevue, c.prix_unitaire, f.numero_de_compte AS compte
                                                     FROM prefinancements_fournisseurs pf
                                                     JOIN fournisseurs f ON pf.id_fournisseur = f.id
                                                     LEFT JOIN contrats c ON pf.numero_contrat = c.numero_contrat
@@ -11756,7 +11756,8 @@ elif choix == "👑 Espace Direction":
                                                         "mode_reglement": "Virement bancaire",
                                                         "code_verification": code_verif,
                                                         "code_verif": code_verif,
-                                                        "observations": pref_data[4] or ""         # ✅ Ajouté pour afficher les observations
+                                                        "observations": pref_data[4] or "",        # ✅ Ajouté pour afficher les observations
+                                                        "num_compte": pref_data[7] or "N/A"
                                                     }
                                                     
                                                     res = generer_bon_paiement_pdf(
