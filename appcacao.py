@@ -997,29 +997,6 @@ def generer_bon_paiement_pdf(
 
     pdf.set_y(35)
     
-    # 2. QR CODE D'AUTHENTICITÉ (Haut Droite - Si disponible)
-    code_verif = data_paiement.get("code_verification") or data_paiement.get("code_verif")
-    if code_verif:
-            try:
-                # Génération du QR code en image temporaire
-                qr_data = f"Ref: {data_paiement.get('num', '')} | Code: {code_verif}"
-                qr = qrcode.QRCode(box_size=4, border=1)
-                qr.add_data(qr_data)
-                qr.make(fit=True)
-                qr_img = qr.make_image(fill_color="black", back_color="white")
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_qr:
-                    qr_img.save(tmp_qr.name)
-                    tmp_qr_path = tmp_qr.name
-                # Affichage du QR code (Coin supérieur droit : x=165, y=8, largeur=28mm)
-                pdf.image(tmp_qr_path, x=165, y=8, w=28)
-                # Mention du code sous le QR Code
-                pdf.set_xy(155, 37)
-                pdf.set_font("Times", "B", 8)
-                pdf.cell(48, 4, _clean_text(f"Code : {code_verif}"), align="C")
-                os.remove(tmp_qr_path)
-            except Exception as e:
-                print(f"Erreur d'insertion du QR Code : {e}")
-
     # --- DÉTERMINATION DU TYPE DE DOCUMENT ---
     # Rétrocompatibilité avec l'ancien système de flags
     if type_document == "bon_caisse":
