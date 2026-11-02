@@ -1221,76 +1221,70 @@ def generer_bon_paiement_pdf(
     pdf.set_draw_color(120, 120, 120)
 
     if is_prefinancement:
-        # ---- Tableau adapté au préfinancement ----
-        pdf.cell(110, 8, " DESIGNATION DE L'AVANCE", border=1, fill=True, align="L")
-        pdf.cell(70, 8, "MONTANT (FCFA)", border=1, fill=True, align="C")
-        pdf.ln()
+    # ---- Tableau adapté au préfinancement ----
+    pdf.cell(110, 8, " DESIGNATION DE L'AVANCE", border=1, fill=True, align="L")
+    pdf.cell(70, 8, "MONTANT (FCFA)", border=1, fill=True, align="C")
+    pdf.ln()
 
-        _set_font_safely(pdf, "", 10)
-        pdf.cell(110, 8, _clean_text(" Avance financière sur contrat fournisseur"),
-                 border=1, align="L")
-        pdf.cell(70, 8, f"{float(data_paiement.get('total', 0)):,.0f}",
-                 border=1, ln=1, align="C")
+    _set_font_safely(pdf, "", 10)
+    pdf.cell(110, 8, _clean_text(" Avance financière sur contrat fournisseur"),
+             border=1, align="L")
+    pdf.cell(70, 8, f"{float(data_paiement.get('total', 0)):,.0f}",
+             border=1, ln=1, align="C")
 
-        # Ligne contrat lié
-        if num_contrat and num_contrat not in ("______", "N/A", ""):
-            _set_font_safely(pdf, "I", 9)
-            pdf.set_fill_color(245, 245, 245)
-            pdf.cell(180, 7, _clean_text(f" Contrat lié : {num_contrat}"),
-                     border=1, fill=True, ln=1)
-
-        # Ligne observations
-        obs = data_paiement.get("observations") or ""
-        if obs:
-            _set_font_safely(pdf, "I", 8)
-            pdf.multi_cell(180, 5, _clean_text(f" Observations : {obs}"), border=1, align="L")
-
-        pdf.ln(3)
-
-        # Sous-total simplifié
-        _set_font_safely(pdf, "B", 10)
+    # Ligne contrat lié
+    if num_contrat and num_contrat not in ("______", "N/A", ""):
+        _set_font_safely(pdf, "I", 9)
         pdf.set_fill_color(245, 245, 245)
-        pdf.cell(150, 7, "MONTANT DE L'AVANCE : ", border=1, fill=True, align="R")
-        pdf.cell(30, 7, f"{float(data_paiement.get('total', 0)):,.0f} FCFA ",
-                 border=1, ln=1, fill=True, align="R")
-    else:
-        # ---- Tableau classique (achat de cacao) ----
-        pdf.cell(70, 8, " DESIGNATION", border=1, fill=True, align="L")
-        pdf.cell(40, 8, "PRIX / KG", border=1, fill=True, align="C")
-        pdf.cell(40, 8, "QUANTITE", border=1, fill=True, align="C")
-        pdf.cell(40, 8, "MONTANT BRUT", border=1, fill=True, align="C")
-        pdf.ln()
+        pdf.cell(180, 7, _clean_text(f" Contrat lié : {num_contrat}"),
+                 border=1, fill=True, ln=1)
 
-        _set_font_safely(pdf, "", 10)
-        prefix_desig = (
-            "Règlement Reliquat -"
-            if type_document == "reglement_dette"
-            else "Achat Cacao -"
-        )
-        designation_text = f" {prefix_desig} Lot N° {num_lot}"
-        pdf.cell(70, 8, _clean_text(designation_text), border=1, align="L")
-        pdf.cell(40, 8, f"{pu:,.0f} FCFA", border=1, align="C")
-        pdf.cell(40, 8, f"{qte:,.2f} kg", border=1, align="C")
-        pdf.cell(40, 8, f"{valeur_brute:,.0f} FCFA", border=1, ln=1, align="C")
+    # Ligne observations
+    obs = data_paiement.get("observations") or ""
+    if obs:
+        _set_font_safely(pdf, "I", 8)
+        pdf.multi_cell(180, 5, _clean_text(f" Observations : {obs}"), border=1, align="L")
 
-        # SOUS-TOTAL (uniquement pour les achats)
-        pdf.set_fill_color(245, 245, 245)
-        _set_font_safely(pdf, "B", 10)
-        pdf.cell(150, 7, "POIDS NET : ", border=1, fill=True, align="R")
-        pdf.cell(40, 7, f"{poids_net} kg ", border=1, ln=1, fill=True, align="R")
-        pdf.cell(150, 7, "VALEUR DU LOT BRUT : ", border=1, fill=True, align="R")
-        pdf.cell(40, 7, f"{valeur_brute:,.0f} FCFA ", border=1, ln=1, fill=True, align="R")
+    pdf.ln(3)
 
-    # SOUS-TOTAL
+    # Sous-total simplifié (Uniquement le montant de l'avance)
+    _set_font_safely(pdf, "B", 10)
+    pdf.set_fill_color(230, 245, 230)
+    pdf.cell(150, 7, " MONTANT DE L'AVANCE À VERSER : ", border=1, fill=True, align="R")
+    pdf.cell(30, 7, f"{float(data_paiement.get('total', 0)):,.0f} FCFA ",
+             border=1, ln=1, fill=True, align="R")
+
+else:
+    # ---- Tableau classique (achat de cacao) ----
+    pdf.cell(70, 8, " DESIGNATION", border=1, fill=True, align="L")
+    pdf.cell(40, 8, "PRIX / KG", border=1, fill=True, align="C")
+    pdf.cell(40, 8, "QUANTITE", border=1, fill=True, align="C")
+    pdf.cell(40, 8, "MONTANT BRUT", border=1, fill=True, align="C")
+    pdf.ln()
+
+    _set_font_safely(pdf, "", 10)
+    prefix_desig = (
+        "Règlement Reliquat -"
+        if type_document == "reglement_dette"
+        else "Achat Cacao -"
+    )
+    designation_text = f" {prefix_desig} Lot N° {num_lot}"
+    pdf.cell(70, 8, _clean_text(designation_text), border=1, align="L")
+    pdf.cell(40, 8, f"{pu:,.0f} FCFA", border=1, align="C")
+    pdf.cell(40, 8, f"{qte:,.2f} kg", border=1, align="C")
+    pdf.cell(40, 8, f"{valeur_brute:,.0f} FCFA", border=1, ln=1, align="C")
+
+    # SOUS-TOTAL (uniquement pour les achats)
     pdf.set_fill_color(245, 245, 245)
     _set_font_safely(pdf, "B", 10)
     pdf.cell(150, 7, "POIDS NET : ", border=1, fill=True, align="R")
     pdf.cell(40, 7, f"{poids_net} kg ", border=1, ln=1, fill=True, align="R")
     pdf.cell(150, 7, "VALEUR DU LOT BRUT : ", border=1, fill=True, align="R")
-    pdf.cell(
-        40, 7, f"{valeur_brute:,.0f} FCFA ", border=1, ln=1, fill=True, align="R"
-    )
-    pdf.ln(5)
+    pdf.cell(40, 7, f"{valeur_brute:,.0f} FCFA ", border=1, ln=1, fill=True, align="R")
+
+
+
+pdf.ln(5)
 
     # 4. TABLEAU 2 : SITUATION FINANCIÈRE PERSONNALISÉE
     #    ⚠️ Détection : préfinancement = pas de lot de cacao, juste une avance
@@ -11495,8 +11489,6 @@ elif choix == "👑 Espace Direction":
                                 # 🆕 CAS SPÉCIAL : BON DE PAIEMENT POUR PRÉFINANCEMENT
                                 if doc_ref.startswith("PAY-PREF-"):
                                     ref_pref = doc_ref.replace("PAY-", "")
-                                    
-                                    # On récupère les infos du préfinancement ET du contrat lié
                                     pref_data = fetch_one("""
                                         SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations,
                                                c.quantite_prevue, c.prix_unitaire
@@ -11507,30 +11499,32 @@ elif choix == "👑 Espace Direction":
                                     """, (ref_pref,))
                                     
                                     if pref_data:
-                                        # On prépare les données pour le PDF
+                                        # On calcule la valeur du contrat pour l'affichage
+                                        qte_contrat = float(pref_data[5] or 0)
+                                        pu_contrat = float(pref_data[6] or 0)
+                                        valeur_contrat = qte_contrat * pu_contrat
+                                        
                                         data_p = {
                                             "num_paiement": doc_ref,
                                             "date": datetime.now().strftime('%d/%m/%Y'),
                                             "fournisseur": pref_data[1],
                                             "num_lot": "N/A - PREFINANCEMENT",
                                             "num_contrat": pref_data[3] or "Avance Générale",
-                                            "quantite_kg": float(pref_data[5] or 0), # Récupéré du contrat
-                                            "prix_unitaire": float(pref_data[6] or 0), # Récupéré du contrat
+                                            "quantite_kg": qte_contrat,   # Récupéré du contrat
+                                            "prix_unitaire": pu_contrat,  # Récupéré du contrat
                                             "total": float(pref_data[2]), # Montant du préfinancement
-                                            "poids_net": float(pref_data[5] or 0), # Récupéré du contrat
+                                            "poids_net": qte_contrat,     # Récupéré du contrat
                                             "deductions": 0.0,
                                             "libelle_deductions": "Aucune",
                                             "versement": float(pref_data[2]),
                                             "reste": 0.0,
                                             "mode_reglement": "Virement bancaire",
                                             "observations": pref_data[4] or "",
-                                            # On génère un code temporaire pour l'aperçu, il sera écrasé à la validation
                                             "code_verification": "APERCU-TEMP", 
                                             "code_verif": "APERCU-TEMP"
                                         }
                                         res = generer_bon_paiement_pdf(data_p, type_document='bon_paiement')
                                         pdf_bytes = res[1] if isinstance(res, tuple) else res
-                                
                                 # CAS NORMAL : ACHAT CLASSIQUE
                                 else:
                                     match = re.search(r'PAY-(\d+)-', doc_ref)
@@ -11747,10 +11741,14 @@ elif choix == "👑 Espace Direction":
                                             # 🆕 GESTION PRE-FINANCEMENT LORS DE LA VALIDATION
                                             if doc_ref.startswith("PAY-PREF-"):
                                                 ref_pref = doc_ref.replace("PAY-", "")
+                                                
+                                                # ✅ On ajoute la jointure avec la table 'contrats' pour récupérer 'quantite_prevue' et 'prix_unitaire'
                                                 pref_data = fetch_one("""
-                                                    SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations
+                                                    SELECT pf.id, f.nom, pf.montant_accorde, pf.numero_contrat, pf.observations,
+                                                           c.quantite_prevue, c.prix_unitaire
                                                     FROM prefinancements_fournisseurs pf
                                                     JOIN fournisseurs f ON pf.id_fournisseur = f.id
+                                                    LEFT JOIN contrats c ON pf.numero_contrat = c.numero_contrat
                                                     WHERE pf.reference = %s
                                                 """, (ref_pref,))
                                                 
@@ -11761,18 +11759,20 @@ elif choix == "👑 Espace Direction":
                                                         "fournisseur": pref_data[1],
                                                         "num_lot": "N/A (Préfinancement)",
                                                         "num_contrat": pref_data[3] or "Avance Générale",
-                                                        "quantite_kg": 0.0,
-                                                        "prix_unitaire": 0.0,
+                                                        "quantite_kg": float(pref_data[5] or 0),  # ✅ Récupéré du contrat
+                                                        "prix_unitaire": float(pref_data[6] or 0), # ✅ Récupéré du contrat
                                                         "total": float(pref_data[2]),
-                                                        "poids_net": 0.0,
+                                                        "poids_net": float(pref_data[5] or 0),     # ✅ Récupéré du contrat
                                                         "deductions": 0.0,
                                                         "libelle_deductions": "Aucune",
                                                         "versement": float(pref_data[2]),
                                                         "reste": 0.0,
                                                         "mode_reglement": "Virement bancaire",
                                                         "code_verification": code_verif,
-                                                        "code_verif": code_verif
+                                                        "code_verif": code_verif,
+                                                        "observations": pref_data[4] or ""         # ✅ Ajouté pour afficher les observations
                                                     }
+                                                    
                                                     res = generer_bon_paiement_pdf(
                                                         data_p,
                                                         type_document=doc_type,
