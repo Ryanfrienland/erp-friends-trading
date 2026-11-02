@@ -337,7 +337,7 @@ def _url_verification(reference: str, code: str) -> str:
 
 
 def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str,
-                       x_qr: float = 470, y_qr: float = 115, largeur_qr: float = 70) -> bytes:
+                       x_qr: float = 45, y_qr: float = 170, largeur_qr: float = 70) -> bytes:
     # ✅ On encode l'URL de vérification, pas juste REF|CODE
     contenu_qr = _url_verification(reference, code_verification)
     qr_img = generer_qr_code(contenu_qr, taille=160)
@@ -363,7 +363,8 @@ def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str,
     resultat = BytesIO()
     writer.write(resultat)
     return resultat.getvalue()
-                           
+
+    
 def convertir_df_csv(df):
     return df.to_csv(index=False).encode("utf-8")
 
@@ -5199,6 +5200,11 @@ elif choix == "🧾 Achats (Entrees)":
                                             pass
                                     
                                     # Téléchargement
+                                    if pdf_bytes and code_verif:
+                                        if type_doc in ("bon_paiement", "bon_caisse", "engagement_dette", "reglement_dette"):
+                                            pdf_bytes = apposer_qr_sur_pdf(pdf_bytes, code_verif, ref_doc, **QR_BON_PAIEMENT)
+                                        else:
+                                            pdf_bytes = apposer_qr_sur_pdf(pdf_bytes, code_verif, ref_doc)
                                     if pdf_bytes:
                                         st.download_button(
                                             label="💾 Cliquez ici pour enregistrer",
@@ -11869,9 +11875,8 @@ elif choix == "👑 Espace Direction":
                                         elif doc_type in ['bon_paiement', 'bon_caisse', 'engagement_dette', 'reglement_dette', 'acompte']:
                                             # Coordonnées spécifiques pour les bons de paiement (en haut à droite)
                                             pdf_bytes_final = apposer_qr_sur_pdf(
-                                                pdf_bytes, code_verif, row['reference'],
-                                                x_qr=470, y_qr=730, largeur_qr=60
-                                            )
+    pdf_bytes, code_verif, row['reference'], **QR_BON_PAIEMENT
+)
                                         else:
                                             pdf_bytes_final = apposer_qr_sur_pdf(pdf_bytes, code_verif, row['reference'])
                                         
