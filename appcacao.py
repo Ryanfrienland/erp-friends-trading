@@ -1247,13 +1247,6 @@ def generer_bon_paiement_pdf(
     
         pdf.ln(3)
     
-        # Sous-total simplifié (Uniquement le montant de l'avance)
-        _set_font_safely(pdf, "B", 10)
-        pdf.set_fill_color(230, 245, 230)
-        pdf.cell(150, 7, " MONTANT DE L'AVANCE À VERSER : ", border=1, fill=True, align="R")
-        pdf.cell(30, 7, f"{float(data_paiement.get('total', 0)):,.0f} FCFA ",
-                 border=1, ln=1, fill=True, align="R")
-    
     else:
         # ---- Tableau classique (achat de cacao) ----
         pdf.cell(70, 8, " DESIGNATION", border=1, fill=True, align="L")
