@@ -11861,11 +11861,14 @@ elif choix == "👑 Espace Direction":
                                                     x_qr=g["qr_x_pt"], y_qr=g["qr_y_pt"],
                                                     largeur_qr=g["qr_size_pt"]
                                                 )
+                                            elif doc_type in ['bon_paiement', 'bon_caisse', 'engagement_dette', 'reglement_dette', 'acompte']:
+                                                # Coordonnées spécifiques pour les bons (coin supérieur droit, sous le titre)
+                                                pdf_bytes_final = apposer_qr_sur_pdf(
+                                                    pdf_bytes, code_verif, row['reference'],
+                                                    x_qr=470, y_qr=700, largeur_qr=60
+                                                )
                                             else:
                                                 pdf_bytes_final = apposer_qr_sur_pdf(pdf_bytes, code_verif, row['reference'])
-                                            hash_final = calculer_hash_pdf(pdf_bytes_final)
-                                        else:
-                                            raise Exception("Impossible de générer le PDF avec cachet")
 
                                         # 4. Mise à jour en base (DANS LE WITH CURSOR)
                                         with conn.cursor() as cur:
