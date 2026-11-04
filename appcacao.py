@@ -10201,14 +10201,19 @@ elif choix == "🏪 Magasins":
                                     except (ValueError, TypeError):
                                         p_net_num = 0.0
 
+                                    # 🔧 FIX FINAL : On force le type de TOUTES les variables pour PostgreSQL
+                                    p_brut_num = float(p_brut) if p_brut and str(p_brut).strip() else 0.0
+                                    p_net_num = float(p_net) if p_net and str(p_net).strip() else 0.0
+                                    n_sacs_num = int(n_sacs) if n_sacs else 0
+
                                     cur.execute("""
                                         UPDATE achats 
-                                        SET poids_brut = COALESCE(poids_brut, 0) + %s,
-                                            poids_net = COALESCE(poids_net, 0) + %s,
-                                            quantite_kg = COALESCE(quantite_kg, 0) + %s,
-                                            nombre_de_sacs = COALESCE(nombre_de_sacs, 0) + %s
+                                        SET poids_brut = COALESCE(poids_brut, 0) + CAST(%s AS NUMERIC),
+                                            poids_net = COALESCE(poids_net, 0) + CAST(%s AS NUMERIC),
+                                            quantite_kg = COALESCE(quantite_kg, 0) + CAST(%s AS NUMERIC),
+                                            nombre_de_sacs = COALESCE(nombre_de_sacs, 0) + CAST(%s AS INTEGER)
                                         WHERE numero_de_lot = %s AND statut = 'En attente de facturation'
-                                    """, (p_brut_num, p_net_num, p_net_num, n_sacs, num_lot_final))    
+                                    """, (p_brut_num, p_net_num, p_net_num, n_sacs_num, num_lot_final))
 
                                 commentaire = f"Réception du lot {num_lot_final} - Contrat {ncc}" 
 
