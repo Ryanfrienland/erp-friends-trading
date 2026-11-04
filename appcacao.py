@@ -10196,16 +10196,13 @@ elif choix == "🏪 Magasins":
                                     except (ValueError, TypeError):
                                         p_brut_num = 0.0
 
-                                    try:
-                                        p_net_num = float(p_net) if p_net and str(p_net).strip() else 0.0
-                                    except (ValueError, TypeError):
-                                        p_net_num = 0.0
-
                                     # 🔧 FIX FINAL : On force le type de TOUTES les variables pour PostgreSQL
+                                    # On s'assure que ce sont des types natifs Python (float, int) et non des types numpy
                                     p_brut_num = float(p_brut) if p_brut and str(p_brut).strip() else 0.0
                                     p_net_num = float(p_net) if p_net and str(p_net).strip() else 0.0
                                     n_sacs_num = int(n_sacs) if n_sacs else 0
 
+                                    # On utilise CAST pour forcer PostgreSQL à traiter les paramètres comme des nombres
                                     cur.execute("""
                                         UPDATE achats 
                                         SET poids_brut = COALESCE(poids_brut, 0) + CAST(%s AS NUMERIC),
@@ -10213,7 +10210,7 @@ elif choix == "🏪 Magasins":
                                             quantite_kg = COALESCE(quantite_kg, 0) + CAST(%s AS NUMERIC),
                                             nombre_de_sacs = COALESCE(nombre_de_sacs, 0) + CAST(%s AS INTEGER)
                                         WHERE numero_de_lot = %s AND statut = 'En attente de facturation'
-                                    """, (p_brut_num, p_net_num, p_net_num, n_sacs_num, num_lot_final))
+                                    """, (p_brut_num, p_net_num, p_net_num, n_sacs_num, num_lot_final))    
 
                                 commentaire = f"Réception du lot {num_lot_final} - Contrat {ncc}" 
 
