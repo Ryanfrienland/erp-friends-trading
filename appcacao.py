@@ -10189,14 +10189,26 @@ elif choix == "🏪 Magasins":
                                             p_brut, p_net, n_sacs, p_net, num_br_genere))
                                         id_achat = cur.fetchone()[0]
 
+                                    
+                                    # 🔧 FIX : Conversion sécurisée des chaînes en nombres décimaux
+                                    try:
+                                        p_brut_num = float(p_brut) if p_brut and str(p_brut).strip() else 0.0
+                                    except (ValueError, TypeError):
+                                        p_brut_num = 0.0
+
+                                    try:
+                                        p_net_num = float(p_net) if p_net and str(p_net).strip() else 0.0
+                                    except (ValueError, TypeError):
+                                        p_net_num = 0.0
+
                                     cur.execute("""
                                         UPDATE achats 
-                                        SET poids_brut = poids_brut + %s,
-                                            poids_net = poids_net + %s,
-                                            quantite_kg = quantite_kg + %s,
-                                            nombre_de_sacs = nombre_de_sacs + %s
+                                        SET poids_brut = COALESCE(poids_brut, 0) + %s,
+                                            poids_net = COALESCE(poids_net, 0) + %s,
+                                            quantite_kg = COALESCE(quantite_kg, 0) + %s,
+                                            nombre_de_sacs = COALESCE(nombre_de_sacs, 0) + %s
                                         WHERE numero_de_lot = %s AND statut = 'En attente de facturation'
-                                    """, (p_brut, p_net, p_net, n_sacs, num_lot_final))
+                                    """, (p_brut_num, p_net_num, p_net_num, n_sacs, num_lot_final))    
 
                                 commentaire = f"Réception du lot {num_lot_final} - Contrat {ncc}" 
 
