@@ -3444,7 +3444,28 @@ def insert_dict(cursor, table, data):
     cursor.execute(query, values)
     row = cursor.fetchone()
     return row[0] if row else None
-
+    
+SQL_STOCK_MAGASINS = """
+    SELECT
+        m.id, m.nom, m.emplacement, m.capacite_kg, m.responsable,
+        COALESCE((
+            SELECT SUM(spm.poids_net_payable
+                       + spm.quantite_transferee_in
+                       - spm.quantite_transferee_out)
+            FROM stock_par_magasin spm WHERE spm.magasin = m.nom
+        ), 0)
+        - COALESCE((
+            SELECT SUM(v.quantite_kg) FROM ventes v
+            WHERE v.id_magasin = m.id AND v.statut_livraison = 'Livré'
+        ), 0)
+        + COALESCE((
+            SELECT SUM(a.quantite_kg) FROM ajustements_stock_magasin a
+            WHERE a.id_magasin = m.id
+        ), 0) AS stock_actuel
+    FROM magasins m
+    ORDER BY m.nom
+"""
+        
 with st.sidebar:
     # ==============================================================
     # STYLES DU MENU LATÉRAL — VERSION CLAIRE & MODERNE
@@ -3893,29 +3914,31 @@ if choix == "🏠 Tableau de Bord":
             cur.execute("SELECT COALESCE(SUM(quantite_kg), 0) FROM ventes WHERE statut != 'En attente de facturation'")
             total_volume_vendu = cur.fetchone()[0] or 0
 
-        # --- Stock ---
-        entree = get_val("SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE type='Entrée'")
-        sortie = get_val("SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE type='Sortie'")
-        stock_actuel = entree - sortie
+            # --- Stock (Aligné sur SQL_STOCK_MAGASINS) ---
+            df_stock_global = get_dataframe_from_query(SQL_STOCK_MAGASINS)
+            if not df_stock_global.empty:
+                stock_actuel = float(pd.to_numeric(df_stock_global["stock_actuel"], errors="coerce").fillna(0).sum())
+            else:
+                stock_actuel = 0.0
 
-        # --- Taux de change (à personnaliser) ---
-        TAUX_CHANGE = {
-            'XAF': 1.0,
-            'EUR': 655.957,   # 1 EUR = 655.957 XAF
-            'USD': 600.0,     # Exemple, à ajuster
-            'GBP': 750.0,     # Exemple
-        }
-
-        # Calcul du total des ventes en FCFA (pour la balance)
-        tot_ventes_xaf = 0.0
-        for devise, montant in ventes_par_devise.items():
-            tot_ventes_xaf += montant * TAUX_CHANGE.get(devise, 1.0)
-
-        benefice_brut = tot_ventes_xaf - tot_achats
-
-    except Exception as e:
-        st.error(f"❌ Erreur lors du chargement des données du tableau de bord : {e}")
-        st.stop()
+            # --- Taux de change (à personnaliser) ---
+            TAUX_CHANGE = {
+                'XAF': 1.0,
+                'EUR': 655.957,   # 1 EUR = 655.957 XAF
+                'USD': 600.0,     # Exemple, à ajuster
+                'GBP': 750.0,     # Exemple
+            }
+    
+            # Calcul du total des ventes en FCFA (pour la balance)
+            tot_ventes_xaf = 0.0
+            for devise, montant in ventes_par_devise.items():
+                tot_ventes_xaf += montant * TAUX_CHANGE.get(devise, 1.0)
+    
+            benefice_brut = tot_ventes_xaf - tot_achats
+    
+        except Exception as e:
+            st.error(f"❌ Erreur lors du chargement des données du tableau de bord : {e}")
+            st.stop()
 
     # ---------------------------------------------------------
     # 3. AFFICHAGE DES KPIS (avec devises pour les ventes)
@@ -5629,15 +5652,19 @@ elif choix == "🛍️ Ventes (Sorties)":
                     ORDER BY a.date DESC
                 """, (magasin_source,))
 
-                lots_options = ["🎯 Vente générique (sans lot spécifique)"] + \
-                               [f"Lot {l[0]} — {float(l[1] or 0):,.0f} kg — Qualité: {l[4] or 'N/A'}" for l in lots_dispo]
+                # 🔒 On oblige la sélection d'un lot réel (plus de vente générique)
+                if not lots_dispo:
+                    st.error("❌ Aucun lot en stock dans ce magasin. Impossible de vendre.")
+                    st.stop()
+
+                lots_options = [f"Lot {l[0]} — {float(l[1] or 0):,.0f} kg — Qualité: {l[4] or 'N/A'}" for l in lots_dispo]
 
                 lot_selectionne = st.selectbox(
-                    "Lot source à vendre",
+                    "Lot source à vendre *",
                     lots_options,
                     index=0,
                     key="w2_lot",
-                    help="Sélectionnez le lot spécifique pour tracer la qualité, ou vente générique."
+                    help="Sélectionnez le lot spécifique pour tracer la qualité et mettre à jour le stock."
                 )
 
             st.divider()
@@ -5733,7 +5760,7 @@ elif choix == "🛍️ Ventes (Sorties)":
                     d.update({
                         "magasin_source": magasin_source,
                         "lot_selectionne": lot_selectionne,
-                        "numero_lot_source": lot_selectionne.split(" — ")[0].replace("Lot ", "").strip() if lot_selectionne != lots_options[0] else None,
+                        "numero_lot_source": lot_selectionne.split(" — ")[0].replace("Lot ", "").strip(),
                         "grade_produit": grade_produit,
                         "certification": certification,
                         "humidite_facturee": humidite_facturee,
@@ -8191,7 +8218,7 @@ elif choix == "📦 Mouvements de Stock":
                 ), 0),
                 COALESCE(SUM(spm.quantite_transferee_in), 0),
                 COALESCE(SUM(spm.quantite_transferee_out), 0),
-                -- 🆕 Stock dispo = payable + transf_in - transf_out - livré (calculé direct)
+                -- 🆕 Stock dispo = payable + transf_in - transf_out - livré + ajustements
                 GREATEST(0,
                     COALESCE(SUM(spm.poids_net_payable), 0)
                     + COALESCE(SUM(spm.quantite_transferee_in), 0)
@@ -8200,6 +8227,10 @@ elif choix == "📦 Mouvements de Stock":
                         SELECT SUM(v.quantite_kg) 
                         FROM ventes v 
                         WHERE v.statut_livraison = 'Livré'
+                    ), 0)
+                    + COALESCE((
+                        SELECT SUM(a.quantite_kg) 
+                        FROM ajustements_stock_magasin a
                     ), 0)
                 )
             FROM stock_par_magasin spm
@@ -8392,7 +8423,6 @@ elif choix == "📦 Mouvements de Stock":
         spm.poids_net_recu,
         spm.refaction,
         spm.poids_net_payable,
-        -- 🆕 Calcul dynamique des livraisons depuis ventes
         COALESCE((
             SELECT SUM(v.quantite_kg)
             FROM ventes v
@@ -8401,7 +8431,7 @@ elif choix == "📦 Mouvements de Stock":
         ), 0) AS quantite_livree,
         spm.quantite_transferee_in,
         spm.quantite_transferee_out,
-        -- 🆕 Stock dispo recalculé en direct
+        -- Calcul direct avec ajustements
         GREATEST(0,
             spm.poids_net_payable
             + spm.quantite_transferee_in
@@ -8411,6 +8441,11 @@ elif choix == "📦 Mouvements de Stock":
                 FROM ventes v
                 WHERE v.numero_lot_source = spm.numero_lot
                   AND v.statut_livraison = 'Livré'
+            ), 0)
+            + COALESCE((
+                SELECT SUM(a.quantite_kg) 
+                FROM ajustements_stock_magasin a 
+                WHERE a.id_magasin = (SELECT id FROM magasins WHERE nom = spm.magasin LIMIT 1)
             ), 0)
         ) AS stock_disponible,
         spm.date_derniere_maj
@@ -9979,20 +10014,10 @@ elif choix == "🏪 Magasins":
     total_magasins = get_single_value("SELECT COUNT(*) FROM magasins", 0)
     
     # 🆕 Source unique de vérité : stock_par_magasin + ventes
-    kpi_stock = fetch_one("""
-        SELECT
-            COALESCE(SUM(spm.poids_net_payable), 0) 
-                + COALESCE(SUM(spm.quantite_transferee_in), 0) 
-                - COALESCE(SUM(spm.quantite_transferee_out), 0)
-                - COALESCE((SELECT SUM(v.quantite_kg) FROM ventes v WHERE v.statut_livraison = 'Livré'), 0) 
-                AS stock_dispo_total,
-            COALESCE((SELECT SUM(v.quantite_kg) FROM ventes v WHERE v.statut_livraison = 'Livré'), 0) 
-                AS total_sorties
-        FROM stock_par_magasin spm
-    """)
-    
-    stock_physique_total = float(kpi_stock[0] or 0) if kpi_stock else 0.0
-    total_stock_sortie = float(kpi_stock[1] or 0) if kpi_stock else 0.0
+    df_stock_mag = get_dataframe_from_query(SQL_STOCK_MAGASINS)
+    stock_physique_total = float(pd.to_numeric(df_stock_mag["stock_actuel"], errors="coerce").fillna(0).sum()) if not df_stock_mag.empty else 0.0
+    total_stock_sortie = float(get_single_value(
+        "SELECT COALESCE(SUM(quantite_kg),0) FROM ventes WHERE statut_livraison='Livré'", 0))
     
     col_stat1, col_stat2, col_stat3 = st.columns(3)
     col_stat1.metric(label="🏗️ Magasins Actifs", value=total_magasins)
@@ -10346,33 +10371,7 @@ elif choix == "🏪 Magasins":
     with tab3:
         st.subheader("📊 Inventaire détaillé par lot")
 
-        query_magasins = """
-            SELECT 
-                m.id, 
-                m.nom, 
-                m.emplacement, 
-                m.capacite_kg, 
-                m.responsable,
-                -- 🆕 Stock réel par magasin (aligné avec Mouvements de Stock)
-                COALESCE((
-                    SELECT SUM(
-                        spm.poids_net_payable
-                        + spm.quantite_transferee_in
-                        - spm.quantite_transferee_out
-                        - COALESCE((
-                            SELECT SUM(v.quantite_kg)
-                            FROM ventes v
-                            WHERE v.numero_lot_source = spm.numero_lot
-                              AND v.statut_livraison = 'Livré'
-                        ), 0)
-                    )
-                    FROM stock_par_magasin spm
-                    WHERE spm.magasin = m.nom
-                ), 0) AS stock_actuel
-            FROM magasins m
-            ORDER BY m.id DESC
-        """  
-        df_magasins = get_dataframe_from_query(query_magasins)
+        df_magasins = get_dataframe_from_query(SQL_STOCK_MAGASINS)
         
         if not df_magasins.empty:
             cols_jauges = st.columns(min(len(df_magasins), 4))
@@ -10506,7 +10505,56 @@ elif choix == "🏪 Magasins":
     # =====================================================================
     with tab4:
         st.subheader("⚙️ Configuration des Sites")
-        
+        with st.expander("🔧 CORRIGER LE STOCK D'UN MAGASIN (manuel)", expanded=True):
+            df_corr = get_dataframe_from_query(SQL_STOCK_MAGASINS)
+            if df_corr.empty:
+                st.info("Aucun magasin.")
+            else:
+                df_corr["stock_actuel"] = pd.to_numeric(df_corr["stock_actuel"], errors="coerce").fillna(0.0)
+                dict_corr = {f"{r['nom']} — ERP : {r['stock_actuel']:,.0f} kg": (int(r['id']), r['nom'], float(r['stock_actuel']))
+                             for _, r in df_corr.iterrows()}
+                choix_corr = st.selectbox("Magasin à corriger", list(dict_corr.keys()), key="corr_mag_sel")
+                id_mag_c, nom_mag_c, stock_erp = dict_corr[choix_corr]
+
+                with st.form("form_corr_stock_magasin", clear_on_submit=True):
+                    st.info(f"Stock actuel dans l'ERP : **{stock_erp:,.0f} kg**")
+                    nouveau_stock = st.number_input("Stock RÉEL du magasin (kg) *", min_value=0.0,
+                                                    value=max(0.0, stock_erp), step=100.0)
+                    motif_c = st.text_input("Motif *", placeholder="Ex: Recomptage physique du 05/11")
+                    ecart_c = nouveau_stock - stock_erp
+                    st.caption(f"Écart qui sera appliqué : **{ecart_c:+,.0f} kg**")
+
+                    if st.form_submit_button("✅ Appliquer la correction", type="primary", use_container_width=True):
+                        if not motif_c.strip():
+                            st.error("❌ Le motif est obligatoire.")
+                        elif abs(ecart_c) < 0.01:
+                            st.info("Aucun écart, rien à corriger.")
+                        else:
+                            try:
+                                with conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO ajustements_stock_magasin
+                                        (id_magasin, quantite_kg, stock_avant, stock_apres, motif, utilisateur)
+                                        VALUES (%s,%s,%s,%s,%s,%s)
+                                    """, (id_mag_c, ecart_c, stock_erp, nouveau_stock,
+                                          motif_c.strip(), st.session_state.get('username', 'Agent')))
+                                    conn.commit()
+                                log_action(f"🔧 Correction stock {nom_mag_c} : {stock_erp:,.0f} → {nouveau_stock:,.0f} kg ({motif_c[:40]})")
+                                st.success(f"✅ {nom_mag_c} : stock fixé à {nouveau_stock:,.0f} kg")
+                                st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"❌ {e}")
+
+            with st.expander("📜 Historique des corrections"):
+                df_hc = get_dataframe_from_query("""
+                    SELECT TO_CHAR(a.date_ajustement,'DD/MM/YYYY HH24:MI') AS "Date", m.nom AS "Magasin",
+                           a.stock_avant AS "Avant", a.stock_apres AS "Après",
+                           a.quantite_kg AS "Écart", a.motif AS "Motif", a.utilisateur AS "Par"
+                    FROM ajustements_stock_magasin a JOIN magasins m ON m.id = a.id_magasin
+                    ORDER BY a.id DESC LIMIT 50
+                """)
+                st.dataframe(df_hc, use_container_width=True, hide_index=True) if not df_hc.empty else st.caption("Aucune correction.")
         with st.expander("➕ CRÉER UNE NOUVELLE ZONE DE STOCKAGE", expanded=False):
             with st.form("form_magasin", clear_on_submit=True):
                 nom_magasin = st.text_input("Nom de l'Entrepôt / Magasin *")
