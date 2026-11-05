@@ -8056,762 +8056,595 @@ elif choix == "🏗️ Prestataires & Transitaires":
     
 elif choix == "📦 Mouvements de Stock":
     
-    # ---------------------------------------------------------
-    # EN-TÊTE
-    # ---------------------------------------------------------
-    st.title("📦 Gestion des Mouvements de Stock")
-    st.caption("Suivez en temps réel les entrées, sorties et transferts de marchandises.")
-    st.divider()
+    # =========================================================
+    # EN-TÊTE PREMIUM
+    # =========================================================
+    st.markdown("""
+        <style>
+            .stock-header {
+                background: linear-gradient(135deg, #0F172A 0%, #1E293B 60%, #334155 100%);
+                padding: 2rem 2.5rem;
+                border-radius: 20px;
+                margin-bottom: 2rem;
+                border: 1px solid #475569;
+                box-shadow: 0 20px 40px -10px rgba(15,23,42,0.5);
+            }
+            .stock-header h1 {
+                color: #F8FAFC !important;
+                font-size: 2rem;
+                font-weight: 800;
+                margin: 0 !important;
+                letter-spacing: -0.5px;
+            }
+            .stock-header p {
+                color: #94A3B8 !important;
+                margin: 0.4rem 0 0 0;
+                font-size: 1rem;
+            }
+            .kpi-tile {
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 14px;
+                padding: 1rem 1.2rem;
+                box-shadow: 0 2px 8px rgba(15,23,42,0.04);
+                transition: all 0.15s ease;
+                height: 100%;
+            }
+            .kpi-tile:hover {
+                box-shadow: 0 8px 20px rgba(15,23,42,0.08);
+                transform: translateY(-2px);
+            }
+            .kpi-label {
+                font-size: 11px;
+                color: #94A3B8;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 1.5px;
+                margin-bottom: 6px;
+            }
+            .kpi-value {
+                font-size: 1.6rem;
+                font-weight: 800;
+                color: #0F172A;
+                line-height: 1.1;
+            }
+            .kpi-delta {
+                font-size: 12px;
+                font-weight: 600;
+                margin-top: 4px;
+            }
+            .alert-card {
+                background: #FEF3C7;
+                border-left: 4px solid #F59E0B;
+                padding: 12px 16px;
+                border-radius: 8px;
+                margin-bottom: 8px;
+                color: #78350F;
+                font-size: 13px;
+            }
+            .alert-card.critique {
+                background: #FEE2E2;
+                border-left-color: #DC2626;
+                color: #7F1D1D;
+            }
+        </style>
+    """, unsafe_allow_html=True)
 
-    # Récupération de la liste des magasins (une seule fois)
-    magasins = [row[0] for row in fetch_all("SELECT nom FROM magasins")]
+    st.markdown("""
+        <div class="stock-header">
+            <h1>📦 Mouvements de Stock & Bilan Qualitatif</h1>
+            <p>Du poids brut reçu au stock réellement disponible · Suivi temps réel par magasin et par lot</p>
+        </div>
+    """, unsafe_allow_html=True)
 
-    # ---------------------------------------------------------
-    # 1. FORMULAIRE DE SAISIE RAPIDE (dans un expandeur)
-    # ---------------------------------------------------------
-    with st.expander("✏️ Saisir un nouveau mouvement", expanded=False):
-        with st.form("form_mouvement_stock", clear_on_submit=True):
-            st.markdown("#### Informations du mouvement")
-            col1, col2, col3 = st.columns(3)
-            type_mvt = col1.selectbox("Type de mouvement *", ["Entrée", "Sortie", "Transfert"])
-            magasin_dest = col2.selectbox("Magasin concerné *", magasins)
-            
-            # Si transfert, on ajoute un champ source
-            if type_mvt == "Transfert":
-                # Liste des magasins sources (excluant la destination)
-                sources = [m for m in magasins if m != magasin_dest]
-                magasin_source = col3.selectbox("Magasin source *", sources)
+    # =========================================================
+    # HELPERS
+    # =========================================================
+    def _fmt_kg(v):
+        try:
+            return f"{float(v):,.2f}".replace(",", " ")
+        except (ValueError, TypeError):
+            return "0,00"
+
+    def _safe_float(v):
+        try:
+            return float(v) if v is not None else 0.0
+        except (ValueError, TypeError):
+            return 0.0
+
+    # =========================================================
+    # SECTION 1 : BILAN QUALITATIF GLOBAL
+    # =========================================================
+    st.markdown("### ⚖️ Bilan Qualitatif Global")
+    st.caption("Cascade : brut reçu → réfactions → net payable → livraisons → stock disponible")
+
+    try:
+        bilan = fetch_one("""
+            SELECT
+                COALESCE(SUM(poids_brut_recu), 0),
+                COALESCE(SUM(poids_net_recu), 0),
+                COALESCE(SUM(refaction), 0),
+                COALESCE(SUM(poids_net_payable), 0),
+                COALESCE(SUM(quantite_livree), 0),
+                COALESCE(SUM(quantite_transferee_in), 0),
+                COALESCE(SUM(quantite_transferee_out), 0),
+                COALESCE(SUM(stock_disponible), 0)
+            FROM stock_par_magasin
+        """)
+
+        if bilan:
+            brut_t          = _safe_float(bilan[0])
+            net_recu_t      = _safe_float(bilan[1])
+            refact_t        = _safe_float(bilan[2])
+            net_payable_t   = _safe_float(bilan[3])
+            livre_t         = _safe_float(bilan[4])
+            transf_in_t     = _safe_float(bilan[5])
+            transf_out_t    = _safe_float(bilan[6])
+            stock_dispo_t   = _safe_float(bilan[7])
+        else:
+            brut_t = net_recu_t = refact_t = net_payable_t = 0
+            livre_t = transf_in_t = transf_out_t = stock_dispo_t = 0
+
+        taux_refact = (refact_t / brut_t * 100) if brut_t > 0 else 0
+        taux_livr   = (livre_t / net_payable_t * 100) if net_payable_t > 0 else 0
+
+        # ---- KPI 1 : Qualité ----
+        with st.container(border=True):
+            st.markdown("**🔬 Étape 1 — Qualité**")
+            q1, q2, q3, q4 = st.columns(4)
+            q1.metric("📥 Poids Brut Reçu", f"{_fmt_kg(brut_t)} kg")
+            q2.metric("🌾 Poids Net Reçu", f"{_fmt_kg(net_recu_t)} kg",
+                      delta=f"-{_fmt_kg(brut_t - net_recu_t)} kg" if brut_t > net_recu_t else None,
+                      delta_color="off")
+            q3.metric("📉 Réfactions Qualité", f"-{_fmt_kg(refact_t)} kg",
+                      delta=f"{taux_refact:.2f} % du brut", delta_color="inverse")
+            q4.metric("✅ Poids Net Payable", f"{_fmt_kg(net_payable_t)} kg",
+                      help="Base de facturation fournisseur")
+
+        # ---- KPI 2 : Flux physiques ----
+        with st.container(border=True):
+            st.markdown("**🚚 Étape 2 — Flux physiques**")
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("🚛 Livré Clients", f"{_fmt_kg(livre_t)} kg",
+                      delta=f"{taux_livr:.1f} % du payable", delta_color="off")
+            p2.metric("🔄 Transferts + / −", f"+{_fmt_kg(transf_in_t)} / -{_fmt_kg(transf_out_t)} kg")
+            p3.metric("🏪 Stock Disponible", f"{_fmt_kg(stock_dispo_t)} kg")
+
+            # Contrôle de cohérence
+            ecart = net_payable_t + transf_in_t - transf_out_t - livre_t - stock_dispo_t
+            if abs(ecart) < 1:
+                p4.metric("🔍 Contrôle", "✅ Cohérent", help=f"Écart : {ecart:.4f} kg")
             else:
-                magasin_source = None
-                col3.text("(non applicable)")
-            
-            col4, col5, col6 = st.columns(3)
-            qte = col4.number_input("Quantité (kg) *", min_value=0.01, step=10.0)
-            fournisseur = col5.text_input("Fournisseur (ex: nom, adresse)")
-            origine = col6.text_input("Origine / Provenance (ex: fournisseur, client)")
-            
-            commentaire = st.text_area("Commentaire / Motif", placeholder="Précisez le contexte du mouvement...")
-            
-            submit_mvt = st.form_submit_button("✅ Enregistrer le mouvement", type="primary", use_container_width=True)
-            
-            if submit_mvt:
-                if not magasin_dest:
-                    st.error("Veuillez sélectionner un magasin.")
-                elif type_mvt == "Transfert" and not magasin_source:
-                    st.error("Veuillez sélectionner un magasin source pour le transfert.")
-                elif qte <= 0:
-                    st.error("La quantité doit être positive.")
-                else:
-                    date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    try:
-                        with conn.cursor() as cur:
-                            if type_mvt == "Entrée":
-                                cur.execute("""
-                                    INSERT INTO stock (date, type, quantite_kg, origine, magasin_destination, fournisseur, id_contrat, commentaire)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                """, (date_now, "Entrée", qte, origine, magasin_dest, fournisseur, None, commentaire))
-                            elif type_mvt == "Sortie":
-                                # Vérification du stock disponible
-                                cur.execute("""
-                                    SELECT COALESCE(SUM(CASE WHEN type='Entrée' THEN quantite_kg ELSE -quantite_kg END), 0)
-                                    FROM stock WHERE magasin_destination = %s
-                                """, (magasin_dest,))
-                                stock_dispo = cur.fetchone()[0]
-                                if stock_dispo < qte:
-                                    st.error(f"Stock insuffisant dans {magasin_dest}. Disponible : {stock_dispo:.2f} kg")
-                                    st.stop()
-                                else:
-                                    cur.execute("""
-                                        INSERT INTO stock (date, type, quantite_kg, origine, magasin_destination, fournisseur, id_contrat, commentaire)
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                    """, (date_now, "Sortie", qte, origine, magasin_dest, fournisseur, None, commentaire))
-                            elif type_mvt == "Transfert":
-                                # Vérification du stock source
-                                cur.execute("""
-                                    SELECT COALESCE(SUM(CASE WHEN type='Entrée' THEN quantite_kg ELSE -quantite_kg END), 0)
-                                    FROM stock WHERE magasin_destination = %s
-                                """, (magasin_source,))
-                                stock_source = cur.fetchone()[0]
-                                if stock_source < qte:
-                                    st.error(f"Stock insuffisant dans {magasin_source}. Disponible : {stock_source:.2f} kg")
-                                    st.stop()
-                                else:
-                                    # Sortie du magasin source
-                                    cur.execute("""
-                                        INSERT INTO stock (date, type, quantite_kg, origine, magasin_destination, fournisseur, id_contrat, commentaire)
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                    """, (date_now, "Sortie", qte, f"Transfert vers {magasin_dest}", magasin_source, fournisseur, None, f"Transfert vers {magasin_dest} - {commentaire}"))
-                                    # Entrée dans le magasin destination
-                                    cur.execute("""
-                                        INSERT INTO stock (date, type, quantite_kg, origine, magasin_destination, fournisseur, id_contrat, commentaire)
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                    """, (date_now, "Entrée", qte, f"Transfert depuis {magasin_source}", magasin_dest, fournisseur, None, f"Transfert depuis {magasin_source} - {commentaire}"))
-                            conn.commit()
-                            log_action(f"Mouvement stock : {type_mvt} de {qte} kg - {magasin_dest}")
-                            st.success("✅ Mouvement enregistré avec succès !")
-                            st.rerun()
-                    except Exception as e:
-                        conn.rollback()
-                        st.error(f"Erreur lors de l'enregistrement : {e}")
+                p4.metric("🔍 Contrôle", f"⚠️ {ecart:+,.2f} kg",
+                          delta="À vérifier", delta_color="inverse")
 
-    st.divider()
-
-    # ---------------------------------------------------------
-    # 2. ÉTAT DES STOCKS : Jauges + Détail des lots
-    # ---------------------------------------------------------
-    st.subheader("📊 État des stocks par magasin")
-
-    # =========================================================
-    # 2.1 Jauges de capacité par magasin
-    # =========================================================
-    query_magasins = """
-        SELECT
-            m.nom AS magasin,
-            COALESCE(m.capacite_kg, 0) AS capacite,
-            COALESCE((
-                SELECT SUM(
-                    CASE
-                        WHEN s.type = 'Entrée' THEN s.quantite_kg
-                        WHEN s.type = 'Sortie' THEN -s.quantite_kg
-                        ELSE 0
-                    END
-                )
-                FROM stock s
-                WHERE s.magasin_destination = m.nom
-            ), 0) AS stock_actuel
-        FROM magasins m
-        ORDER BY m.nom
-    """
-
-    df_etat = get_dataframe_from_query(query_magasins)
-
-    # Sécurité : vérifier que la requête a bien retourné les colonnes
-    if not df_etat.empty:
-
-        df_etat.columns = [
-            str(c).strip().lower()
-            for c in df_etat.columns
-        ]
-
-        colonnes_requises = {
-            "magasin",
-            "capacite",
-            "stock_actuel"
-        }
-
-        colonnes_manquantes = (
-            colonnes_requises - set(df_etat.columns)
+        # ---- Waterfall ----
+        fig_wf = go.Figure(go.Waterfall(
+            orientation="v",
+            measure=["absolute", "relative", "relative", "total", "relative", "total"],
+            x=["Brut Reçu", "Réfactions", "Livré", "Net Payable", "Transf. net", "Stock Dispo"],
+            textposition="outside",
+            text=[
+                _fmt_kg(brut_t),
+                f"-{_fmt_kg(refact_t)}",
+                f"-{_fmt_kg(livre_t)}",
+                _fmt_kg(net_payable_t),
+                f"+{_fmt_kg(transf_in_t - transf_out_t)}",
+                _fmt_kg(stock_dispo_t)
+            ],
+            y=[brut_t, -refact_t, -livre_t, net_payable_t,
+               (transf_in_t - transf_out_t), stock_dispo_t],
+            connector={"line": {"color": "rgb(148,163,184)", "width": 1.5}},
+            decreasing={"marker": {"color": "#EF4444"}},
+            increasing={"marker": {"color": "#10B981"}},
+            totals={"marker": {"color": "#3B82F6"}},
+        ))
+        fig_wf.update_layout(
+            template="plotly_white",
+            height=340,
+            margin=dict(l=20, r=20, t=20, b=20),
+            showlegend=False,
+            yaxis_title="kg",
+            font=dict(size=12),
         )
+        st.plotly_chart(fig_wf, use_container_width=True, key="waterfall_stock_global_v2")
 
-        if colonnes_manquantes:
-
-            st.error(
-                "❌ Colonnes manquantes dans df_etat : "
-                + ", ".join(sorted(colonnes_manquantes))
-            )
-
-            st.write(
-                "Colonnes reçues :",
-                df_etat.columns.tolist()
-            )
-
-        else:
-
-            cols_jauges = st.columns(
-                min(len(df_etat), 4)
-            )
-
-            for idx, row in df_etat.iterrows():
-
-                with cols_jauges[idx % 4]:
-
-                    cap_kg = pd.to_numeric(
-                        row["capacite"],
-                        errors="coerce"
-                    )
-
-                    cap_kg = (
-                        0.0
-                        if pd.isna(cap_kg)
-                        else float(cap_kg)
-                    )
-
-                    stock_actuel = pd.to_numeric(
-                        row["stock_actuel"],
-                        errors="coerce"
-                    )
-
-                    stock_actuel = (
-                        0.0
-                        if pd.isna(stock_actuel)
-                        else float(stock_actuel)
-                    )
-
-                    magasin_nom = str(
-                        row["magasin"]
-                    )
-
-                    if cap_kg > 0:
-
-                        percent = max(
-                            0.0,
-                            min(
-                                stock_actuel / cap_kg,
-                                1.0
-                            )
-                        )
-
-                        if percent > 0.90:
-                            statut = "🔴 Rempli"
-                        elif percent > 0.60:
-                            statut = "🟡 Modéré"
-                        else:
-                            statut = "🟢 Espace disponible"
-
-                        st.metric(
-                            f"🏢 {magasin_nom}",
-                            f"{stock_actuel:,.0f} kg"
-                        )
-
-                        st.progress(percent)
-
-                        st.caption(
-                            f"{statut} "
-                            f"({cap_kg:,.0f} kg max)"
-                        )
-
-                    else:
-
-                        st.metric(
-                            f"🏢 {magasin_nom}",
-                            f"{stock_actuel:,.0f} kg"
-                        )
-
-                        st.caption(
-                            "Capacité non définie"
-                        )
+    except Exception as e:
+        st.error(f"❌ Erreur bilan global : {e}")
 
     st.divider()
 
-
     # =========================================================
-    # 2.2 DÉTAIL DES LOTS EN STOCK
+    # SECTION 2 : ALERTES AUTOMATIQUES (STOCK FAIBLE)
     # =========================================================
-    st.subheader("📋 Détail des lots en stock")
+    try:
+        alertes = fetch_all("""
+            SELECT spm.magasin, spm.numero_lot, spm.stock_disponible, m.capacite_kg
+            FROM stock_par_magasin spm
+            LEFT JOIN magasins m ON m.nom = spm.magasin
+            WHERE spm.stock_disponible > 0
+              AND m.capacite_kg > 0
+              AND spm.stock_disponible < (m.capacite_kg * 0.10)
+            ORDER BY spm.stock_disponible ASC
+            LIMIT 10
+        """)
 
-    query_detail = """
-        SELECT
-            a.id AS "id_achat",
-            a.numero_de_lot AS "Lot",
-            TO_CHAR(
-                a.date,
-                'YYYY-MM-DD HH24:MI'
-            ) AS "Date_Reception",
-            f.nom AS "Fournisseur",
-            s.numero_camion AS "Camion",
-            s.provenance AS "Provenance",
-            a.nombre_de_sacs AS "Sacs",
-            a.poids_brut AS "Poids_Brut",
-            a.poids_net AS "Poids_Net",
-            s.refaction AS "Refaction",
-            a.poids_net_paye AS "Poids_Net_Payable",
-            m.nom AS "Magasin",
-            a.statut AS "Statut_Facturation",
-            aq.taux_humidite AS "Humidite",
-            aq.statut_qualite AS "Qualite",
-            s.quantite_kg AS "Quantite_Stock"
-        FROM stock s
-        JOIN achats a
-            ON s.id_achat = a.id
-        JOIN fournisseurs f
-            ON a.id_fournisseur = f.id
-        LEFT JOIN analyses_qualite aq
-            ON a.id = aq.id_achat
-        LEFT JOIN magasins m
-            ON s.magasin_destination = m.nom
-        WHERE s.type = 'Entrée'
-        AND s.quantite_kg > 0
-        ORDER BY a.date DESC
-    """
-
-    df_detail = get_dataframe_from_query(query_detail)
-
-
-    if df_detail.empty:
-        st.info("Aucun lot en stock pour le moment.")
-    else:
-        # Filtres
-        col_f1, col_f2, col_f3 = st.columns(3)
-        magasins_list = df_detail['Magasin'].dropna().unique().tolist()
-        magasin_filter = col_f1.selectbox("🏢 Filtrer par magasin", ["Tous"] + magasins_list, key="stock_mvt_magasin_filter")
-        fournisseurs_list = df_detail['Fournisseur'].unique().tolist()
-        fourn_filter = col_f2.selectbox("🏢 Filtrer par fournisseur", ["Tous"] + fournisseurs_list, key="stock_mvt_fournisseur_filter")
-        search = col_f3.text_input("🔍 Recherche (lot, camion, provenance)", "", key="stock_mvt_search")
-
-        # Application des filtres
-        df_filtre = df_detail.copy()
-        if magasin_filter != "Tous":
-            df_filtre = df_filtre[df_filtre['Magasin'] == magasin_filter]
-        if fourn_filter != "Tous":
-            df_filtre = df_filtre[df_filtre['Fournisseur'] == fourn_filter]
-        if search:
-            mask = (
-                df_filtre['Lot'].str.contains(search, case=False, na=False) |
-                df_filtre['Camion'].str.contains(search, case=False, na=False) |
-                df_filtre['Provenance'].str.contains(search, case=False, na=False)
-            )
-            df_filtre = df_filtre[mask]
-
-        if df_filtre.empty:
-            st.warning("Aucun résultat pour ces critères.")
-        else:
-            # Métriques
-            total_kgs = df_filtre['Poids_Net_Payable'].sum()
-            total_sacs = df_filtre['Sacs'].sum()
-            total_lots = len(df_filtre)
-            col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("📦 Lots en stock", total_lots)
-            col_m2.metric("⚖️ Poids total payable", f"{total_kgs:,.2f} kg")
-            col_m3.metric("🛍️ Nombre total de sacs", f"{total_sacs:,.0f}")
-
+        if alertes:
+            st.markdown("### 🚨 Alertes Stock Faible")
+            st.caption("Lots sous 10% de la capacité magasin — pensez à réapprovisionner")
+            for a in alertes:
+                mag = a[0]
+                lot = a[1]
+                dispo = _safe_float(a[2])
+                cap = _safe_float(a[3])
+                pct = (dispo / cap * 100) if cap > 0 else 0
+                st.markdown(
+                    f'<div class="alert-card">'
+                    f'<b>🏢 {mag}</b> — Lot <b>{lot}</b> : '
+                    f'<b>{_fmt_kg(dispo)} kg</b> restants ({pct:.1f}% de la capacité)'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
             st.divider()
+    except Exception as e:
+        logging.error(f"Erreur alertes stock : {e}")
 
-            # Affichage du tableau
+    # =========================================================
+    # SECTION 3 : STOCK DÉTAILLÉ PAR MAGASIN × LOT
+    # =========================================================
+    st.markdown("### 🏢 Stock détaillé par magasin et par lot")
+
+    df_stock = get_dataframe_from_query("""
+        SELECT
+            spm.id,
+            spm.magasin,
+            spm.numero_lot,
+            spm.poids_brut_recu,
+            spm.poids_net_recu,
+            spm.refaction,
+            spm.poids_net_payable,
+            spm.quantite_livree,
+            spm.quantite_transferee_in,
+            spm.quantite_transferee_out,
+            spm.stock_disponible,
+            spm.date_derniere_maj
+        FROM stock_par_magasin spm
+        WHERE spm.poids_net_payable > 0 OR spm.stock_disponible > 0
+        ORDER BY spm.magasin, spm.stock_disponible DESC
+    """)
+
+    if df_stock.empty:
+        st.info("ℹ️ Aucun stock enregistré pour le moment.")
+    else:
+        # Normalisation
+        df_stock.columns = [str(c).strip().lower() for c in df_stock.columns]
+        for col in ['poids_brut_recu', 'poids_net_recu', 'refaction',
+                    'poids_net_payable', 'quantite_livree',
+                    'quantite_transferee_in', 'quantite_transferee_out',
+                    'stock_disponible']:
+            if col in df_stock.columns:
+                df_stock[col] = pd.to_numeric(df_stock[col], errors='coerce').fillna(0.0)
+
+        # ---- Filtres ----
+        with st.container(border=True):
+            st.markdown("**🔍 Filtres**")
+            fc1, fc2, fc3, fc4 = st.columns(4)
+            magasins_dispo = ["Tous"] + sorted(df_stock['magasin'].dropna().unique().tolist())
+            filtre_magasin = fc1.selectbox("🏢 Magasin", magasins_dispo, key="stock_v2_magasin")
+            filtre_lot = fc2.text_input("🔍 Rechercher un lot", placeholder="LOT-2026...", key="stock_v2_lot")
+            filtre_etat = fc3.selectbox(
+                "📊 État",
+                ["Tous", "Avec stock", "Stock épuisé", "Stock critique"],
+                key="stock_v2_etat"
+            )
+            tri = fc4.selectbox(
+                "🔀 Tri",
+                ["Stock décroissant", "Stock croissant", "Lot A→Z", "Lot Z→A"],
+                key="stock_v2_tri"
+            )
+
+        # ---- Application ----
+        df_aff = df_stock.copy()
+        if filtre_magasin != "Tous":
+            df_aff = df_aff[df_aff['magasin'] == filtre_magasin]
+        if filtre_lot:
+            df_aff = df_aff[df_aff['numero_lot'].str.contains(filtre_lot, case=False, na=False)]
+        if filtre_etat == "Avec stock":
+            df_aff = df_aff[df_aff['stock_disponible'] > 0.01]
+        elif filtre_etat == "Stock épuisé":
+            df_aff = df_aff[df_aff['stock_disponible'] <= 0.01]
+        elif filtre_etat == "Stock critique":
+            df_aff = df_aff[(df_aff['stock_disponible'] > 0) & (df_aff['stock_disponible'] < 100)]
+
+        if tri == "Stock décroissant":
+            df_aff = df_aff.sort_values('stock_disponible', ascending=False)
+        elif tri == "Stock croissant":
+            df_aff = df_aff.sort_values('stock_disponible', ascending=True)
+        elif tri == "Lot A→Z":
+            df_aff = df_aff.sort_values('numero_lot')
+        elif tri == "Lot Z→A":
+            df_aff = df_aff.sort_values('numero_lot', ascending=False)
+
+        # ---- KPI filtres ----
+        if not df_aff.empty:
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("📦 Lots affichés", f"{len(df_aff)}")
+            k2.metric("🏪 Stock total", f"{_fmt_kg(df_aff['stock_disponible'].sum())} kg")
+            k3.metric("💰 Net payable", f"{_fmt_kg(df_aff['poids_net_payable'].sum())} kg")
+            k4.metric("🚛 Déjà livré", f"{_fmt_kg(df_aff['quantite_livree'].sum())} kg")
+
+            # ---- Préparation affichage ----
+            df_show = df_aff.copy()
+            df_show = df_show.rename(columns={
+                'magasin': 'Magasin',
+                'numero_lot': 'N° Lot',
+                'poids_brut_recu': 'Brut Reçu (kg)',
+                'poids_net_recu': 'Net Reçu (kg)',
+                'refaction': 'Réfaction (kg)',
+                'poids_net_payable': 'Net Payable (kg)',
+                'quantite_livree': 'Livré (kg)',
+                'quantite_transferee_in': 'Transf. + (kg)',
+                'quantite_transferee_out': 'Transf. − (kg)',
+                'stock_disponible': 'STOCK DISPO (kg)',
+                'date_derniere_maj': 'Dernière MAJ',
+            })
+
+            cols_affichage = [
+                'Magasin', 'N° Lot', 'Brut Reçu (kg)', 'Net Reçu (kg)',
+                'Réfaction (kg)', 'Net Payable (kg)', 'Livré (kg)',
+                'Transf. + (kg)', 'Transf. − (kg)', 'STOCK DISPO (kg)',
+                'Dernière MAJ'
+            ]
+            df_show = df_show[[c for c in cols_affichage if c in df_show.columns]]
+
             st.dataframe(
-                df_filtre,
+                df_show,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "id_achat": st.column_config.NumberColumn("ID", width="small"),
-                    "Lot": st.column_config.TextColumn("Lot"),
-                    "Date_Reception": st.column_config.DatetimeColumn("Date réception", format="DD/MM/YYYY HH:mm"),
-                    "Fournisseur": st.column_config.TextColumn("Fournisseur"),
-                    "Camion": st.column_config.TextColumn("Camion"),
-                    "Provenance": st.column_config.TextColumn("Provenance"),
-                    "Sacs": st.column_config.NumberColumn("Sacs", format="%d"),
-                    "Poids_Brut": st.column_config.NumberColumn("Poids brut (kg)", format="%.2f"),
-                    "Poids_Net": st.column_config.NumberColumn("Poids net (kg)", format="%.2f"),
-                    "Refaction": st.column_config.NumberColumn("Réfaction (kg)", format="%.2f"),
-                    "Poids_Net_Payable": st.column_config.NumberColumn("Net payable (kg)", format="%.2f"),
-                    "Magasin": st.column_config.TextColumn("Magasin"),
-                    "Statut_Facturation": st.column_config.TextColumn("Statut facturation"),
-                    "Humidite": st.column_config.NumberColumn("Humidité (%)", format="%.1f"),
-                    "Qualite": st.column_config.TextColumn("Qualité"),
-                    "Quantite_Stock": st.column_config.NumberColumn("Qté en stock (kg)", format="%.2f"),
+                    "Brut Reçu (kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "Net Reçu (kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "Réfaction (kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "Net Payable (kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "Livré (kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "Transf. + (kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "Transf. − (kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "STOCK DISPO (kg)": st.column_config.NumberColumn(
+                        format="%.2f",
+                        help="Calculé automatiquement par Supabase"
+                    ),
+                    "Dernière MAJ": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
                 }
             )
 
-            # Exports
-            col_exp1, col_exp2 = st.columns(2)
-            with col_exp1:
+            # ---- Export ----
+            ce1, ce2 = st.columns(2)
+            with ce1:
                 st.download_button(
                     "📥 Exporter CSV",
-                    df_filtre.to_csv(index=False).encode('utf-8'),
-                    "stock_detaille.csv",
+                    df_show.to_csv(index=False).encode('utf-8'),
+                    f"stock_par_magasin_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     "text/csv",
                     use_container_width=True
                 )
-            with col_exp2:
+            with ce2:
                 try:
                     st.download_button(
                         "📥 Exporter Excel",
-                        convertir_df_excel(df_filtre),
-                        "stock_detaille.xlsx",
+                        convertir_df_excel(df_show),
+                        f"stock_par_magasin_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
                 except NameError:
                     pass
+        else:
+            st.warning("Aucun lot ne correspond à ces filtres.")
 
-    st.divider()            
-    # ---------------------------------------------------------
-    # 3. HISTORIQUE AVEC FILTRES AVANCÉS
-    # ---------------------------------------------------------
-    st.subheader("🕒 Historique des mouvements")
+    st.divider()
 
-    # Filtres
+    # =========================================================
+    # SECTION 4 : AJUSTEMENT MANUEL
+    # =========================================================
+    st.markdown("### 🔧 Ajustement manuel du stock")
+    st.caption(
+        "Corrigez un écart terrain, régularisez une perte, ou ajustez après un recomptage. "
+        "Chaque ajustement est tracé dans l'historique."
+    )
+
+    with st.expander("🛠️ Effectuer un ajustement", expanded=False):
+        try:
+            rows_ajust = fetch_all("""
+                SELECT id, magasin, numero_lot, stock_disponible, poids_net_payable
+                FROM stock_par_magasin
+                WHERE poids_net_payable > 0
+                ORDER BY magasin, numero_lot DESC
+            """)
+
+            if not rows_ajust:
+                st.info("Aucun lot à ajuster.")
+            else:
+                dict_lots_ajust = {
+                    f"[{r[1]}] {r[2]} — Dispo : {_fmt_kg(r[3])} kg": r
+                    for r in rows_ajust
+                }
+
+                choix_lot = st.selectbox(
+                    "📦 Sélectionner le lot à ajuster *",
+                    list(dict_lots_ajust.keys()),
+                    key="ajust_v2_lot"
+                )
+                lot_data = dict_lots_ajust[choix_lot]
+                stock_actuel = _safe_float(lot_data[3])
+                net_payable_actuel = _safe_float(lot_data[4])
+
+                st.info(
+                    f"**Stock actuel ERP :** {_fmt_kg(stock_actuel)} kg — "
+                    f"**Net payable :** {_fmt_kg(net_payable_actuel)} kg"
+                )
+
+                with st.form("form_ajustement_stock_v2"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        nouveau_stock = st.number_input(
+                            "🎯 Stock physique compté (kg) *",
+                            min_value=0.0,
+                            value=float(stock_actuel),
+                            step=10.0,
+                            key="ajust_v2_nouveau"
+                        )
+                    with c2:
+                        type_ajust = st.selectbox(
+                            "📋 Raison",
+                            ["Inventaire physique", "Perte constatée", "Vol",
+                             "Détérioration", "Correction erreur de saisie", "Autre"],
+                            key="ajust_v2_raison"
+                        )
+
+                    ecart = nouveau_stock - stock_actuel
+                    if abs(ecart) < 0.01:
+                        st.success(f"✅ Aucun écart ({_fmt_kg(stock_actuel)} kg).")
+                    elif ecart > 0:
+                        st.warning(f"⚠️ Écart POSITIF : **+{_fmt_kg(ecart)} kg**")
+                    else:
+                        st.error(f"⚠️ Écart NÉGATIF : **{_fmt_kg(ecart)} kg**")
+
+                    motif_ajust = st.text_area(
+                        "📝 Justification détaillée *",
+                        placeholder="Ex: Recomptage du 15/01 — 3 sacs éventrés constatés",
+                        height=80,
+                        key="ajust_v2_motif"
+                    )
+
+                    submit_ajust = st.form_submit_button(
+                        "✅ Appliquer l'ajustement",
+                        type="primary",
+                        use_container_width=True
+                    )
+
+                    if submit_ajust:
+                        if abs(ecart) < 0.01:
+                            st.info("Aucun ajustement nécessaire.")
+                        elif not motif_ajust.strip():
+                            st.error("❌ Le motif est obligatoire.")
+                        else:
+                            try:
+                                id_stock_row = lot_data[0]
+                                magasin_lot = lot_data[1]
+                                lot_concerne = lot_data[2]
+
+                                with conn.cursor() as cur:
+                                    type_mvt = "Entrée" if ecart > 0 else "Sortie"
+                                    cur.execute("""
+                                        INSERT INTO stock (
+                                            date, type, quantite_kg, origine,
+                                            magasin_destination, commentaire
+                                        ) VALUES (
+                                            CURRENT_TIMESTAMP, %s, %s, %s, %s, %s
+                                        )
+                                    """, (
+                                        type_mvt, abs(ecart), "Ajustement inventaire",
+                                        magasin_lot,
+                                        f"[AJUSTEMENT {type_ajust}] Lot {lot_concerne} : "
+                                        f"{_fmt_kg(stock_actuel)} → {_fmt_kg(nouveau_stock)} kg. "
+                                        f"Motif : {motif_ajust.strip()}"
+                                    ))
+
+                                    cur.execute("""
+                                        UPDATE stock_par_magasin
+                                        SET quantite_livree = quantite_livree + %s,
+                                            date_derniere_maj = CURRENT_TIMESTAMP,
+                                            derniere_modif_par = %s
+                                        WHERE id = %s
+                                    """, (
+                                        -ecart,
+                                        st.session_state.get('username', 'Agent'),
+                                        id_stock_row
+                                    ))
+                                    conn.commit()
+
+                                log_action(
+                                    f"🔧 AJUSTEMENT STOCK : {magasin_lot} / Lot {lot_concerne} — "
+                                    f"{ecart:+,.2f} kg ({type_ajust}) — {motif_ajust[:50]}"
+                                )
+                                st.success(f"✅ Stock ajusté : {ecart:+,.2f} kg")
+                                st.rerun()
+
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"❌ Erreur : {e}")
+
+        except Exception as e:
+            st.error(f"❌ Erreur chargement lots : {e}")
+
+    st.divider()
+
+    # =========================================================
+    # SECTION 5 : HISTORIQUE DES MOUVEMENTS
+    # =========================================================
+    st.markdown("### 📜 Historique des mouvements bruts")
+
     with st.container(border=True):
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-        # Récupération des magasins distincts pour le filtre
-        magasins_db = [row[0] for row in fetch_all("SELECT DISTINCT magasin_destination FROM stock WHERE magasin_destination IS NOT NULL")]
-        magasin_filter = col_f1.selectbox("🏢 Filtrer par magasin", ["Tous"] + magasins_db, key="stock_mvt_historique_magasin_filter")
-        type_filter = col_f2.selectbox("🔄 Filtrer par type", ["Tous", "Entrée", "Sortie"])
-        date_range = col_f3.date_input("📅 Période", value=(date.today() - timedelta(days=30), date.today()), key="date_range")
-        fourn_nom = col_f4.text_input("Filtre par origine/ fournisseur", placeholder="Ex: ETS FRIENDS TRADING")
+        magasins_db = [row[0] for row in fetch_all(
+            "SELECT DISTINCT magasin_destination FROM stock "
+            "WHERE magasin_destination IS NOT NULL"
+        )]
+        f_magasin = col_f1.selectbox("🏢 Magasin", ["Tous"] + magasins_db, key="hist_v2_magasin")
+        f_type = col_f2.selectbox("🔄 Type", ["Tous", "Entrée", "Sortie"], key="hist_v2_type")
+        f_periode = col_f3.date_input(
+            "📅 Période",
+            value=(date.today() - timedelta(days=30), date.today()),
+            key="hist_v2_periode"
+        )
+        f_search = col_f4.text_input("🔍 Recherche", placeholder="Lot, camion...", key="hist_v2_search")
 
-    # Construction de la requête avec filtres
-    query_journal = """
-        SELECT id, date, type, quantite_kg, origine, magasin_destination, fournisseur, id_contrat, commentaire
+    q_hist = """
+        SELECT id, date, type, quantite_kg, origine,
+               magasin_destination, fournisseur, commentaire
         FROM stock WHERE 1=1
     """
-    params = []
-    if magasin_filter != "Tous":
-        query_journal += " AND magasin_destination = %s"
-        params.append(magasin_filter)
-    if type_filter != "Tous":
-        query_journal += " AND type = %s"
-        params.append(type_filter)
-    if date_range:
-        start_date, end_date = date_range
-        query_journal += " AND date >= %s AND date <= %s"
-        params.extend([start_date.strftime("%Y-%m-%d 00:00:00"), end_date.strftime("%Y-%m-%d 23:59:59")])
-    if fourn_nom:
-        query_journal += " AND fournisseur LIKE %s"
-        params.append(f"%{fourn_nom}%")
-    query_journal += " ORDER BY date DESC"
+    p_hist = []
+    if f_magasin != "Tous":
+        q_hist += " AND magasin_destination = %s"
+        p_hist.append(f_magasin)
+    if f_type != "Tous":
+        q_hist += " AND type = %s"
+        p_hist.append(f_type)
+    if isinstance(f_periode, tuple) and len(f_periode) == 2:
+        q_hist += " AND date >= %s AND date <= %s"
+        p_hist.extend([
+            f_periode[0].strftime("%Y-%m-%d 00:00:00"),
+            f_periode[1].strftime("%Y-%m-%d 23:59:59")
+        ])
+    if f_search:
+        q_hist += " AND (commentaire ILIKE %s OR fournisseur ILIKE %s)"
+        p_hist.extend([f"%{f_search}%", f"%{f_search}%"])
+    q_hist += " ORDER BY date DESC LIMIT 500"
 
-    df_journal = get_dataframe_from_query(query_journal, params)
+    df_hist = get_dataframe_from_query(q_hist, p_hist)
 
-    if not df_journal.empty:
+    if df_hist.empty:
+        st.info("Aucun mouvement sur cette période.")
+    else:
         st.dataframe(
-            df_journal,
+            df_hist,
             use_container_width=True,
             hide_index=True,
             column_config={
-                "id": st.column_config.NumberColumn("ID", help="Identifiant du mouvement"),
-                "date": st.column_config.DatetimeColumn("Date & Heure", format="DD/MM/YYYY HH:mm"),
-                "type": st.column_config.TextColumn("Type"),
-                "quantite_kg": st.column_config.NumberColumn("Quantité", format="%.2f kg"),
-                "origine": st.column_config.TextColumn("Origine"),
-                "magasin_destination": st.column_config.TextColumn("Destination"),
-                "fournisseur": st.column_config.TextColumn("Fournisseur"),
-                "id_contrat": st.column_config.TextColumn("ID Contrat"),
-                "commentaire": st.column_config.TextColumn("Remarques")
+                "id": st.column_config.NumberColumn("ID", width="small"),
+                "date": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+                "quantite_kg": st.column_config.NumberColumn(format="%.2f kg"),
+                "type": st.column_config.TextColumn("Type", width="small"),
             }
         )
-
-        # Bouton d'export
-        col_exp, _ = st.columns([1, 3])
-        col_exp.download_button(
-            label="📥 Exporter le journal (CSV)",
-            data=df_journal.to_csv(index=False).encode('utf-8'),
-            file_name="journal_stock.csv",
-            mime="text/csv",
+        st.download_button(
+            "📥 Exporter CSV",
+            df_hist.to_csv(index=False).encode('utf-8'),
+            f"historique_stock_{datetime.now().strftime('%Y%m%d')}.csv",
+            "text/csv",
             use_container_width=True
         )
-
-        # =====================================================================
-        # SECTION ADMIN : MODIFICATION + SUPPRESSION DES MOUVEMENTS
-        # =====================================================================
-        if st.session_state.role == "Admin":
-            st.divider()
-            with st.expander("🛠️ Administration des mouvements (Admin)", expanded=False):
-                st.warning(
-                    "⚠️ **Zone sensible** — Modifier ou supprimer un mouvement impacte directement "
-                    "le stock physique. Chaque action est journalisée."
-                )
-
-                # ----- Sélection du mouvement à éditer -----
-                col_sel1, col_sel2 = st.columns([3, 1])
-                with col_sel1:
-                    selected_id = st.selectbox(
-                        "🔍 Sélectionner un mouvement par ID",
-                        df_journal['id'].tolist(),
-                        key="select_mvt_id"
-                    )
-                with col_sel2:
-                    st.write("")
-                    st.write("")
-                    st.caption(f"ID : **{selected_id}**")
-
-                # ----- Récupération du mouvement en base -----
-                mvt_row = fetch_one("""
-                    SELECT id, date, type, quantite_kg, origine,
-                           magasin_destination, fournisseur, id_contrat, commentaire
-                    FROM stock
-                    WHERE id = %s
-                """, (selected_id,))
-
-                if not mvt_row:
-                    st.error("❌ Mouvement introuvable. Il a peut-être été supprimé.")
-                else:
-                    # Décodage du tuple
-                    (
-                        mvt_id, mvt_date, mvt_type, mvt_qte,
-                        mvt_origine, mvt_magasin, mvt_fournisseur,
-                        mvt_id_contrat, mvt_commentaire
-                    ) = mvt_row
-
-                    # Conversion de la date pour l'affichage
-                    try:
-                        if isinstance(mvt_date, str):
-                            date_valeur = datetime.strptime(mvt_date[:19], "%Y-%m-%d %H:%M:%S")
-                        else:
-                            date_valeur = mvt_date
-                    except Exception:
-                        date_valeur = datetime.now()
-
-                    # Liste des magasins pour le selectbox
-                    magasins_noms = [r[0] for r in fetch_all("SELECT nom FROM magasins ORDER BY nom")]
-
-                    # =============================================================
-                    # ONGLETS INTERNES : Modifier | Supprimer
-                    # =============================================================
-                    tab_edit, tab_del = st.tabs(["✏️ Modifier ce mouvement", "🗑️ Supprimer ce mouvement"])
-
-                    # -------------------------------------------------------------
-                    # ONGLET MODIFIER
-                    # -------------------------------------------------------------
-                    with tab_edit:
-                        st.markdown(f"**Édition du mouvement ID `{mvt_id}`**")
-                        st.caption(
-                            f"📅 Enregistré le **{date_valeur.strftime('%d/%m/%Y à %H:%M')}** "
-                            f"par un utilisateur."
-                        )
-
-                        with st.form("form_edit_mouvement_stock"):
-                            e1, e2, e3 = st.columns(3)
-
-                            with e1:
-                                new_date = st.date_input(
-                                    "📅 Date",
-                                    value=date_valeur.date(),
-                                    key="edit_mvt_date"
-                                )
-                                new_heure = st.time_input(
-                                    "🕐 Heure",
-                                    value=date_valeur.time().replace(microsecond=0),
-                                    key="edit_mvt_heure"
-                                )
-
-                            with e2:
-                                new_type = st.selectbox(
-                                    "🔄 Type de mouvement *",
-                                    ["Entrée", "Sortie"],
-                                    index=0 if mvt_type == "Entrée" else 1,
-                                    key="edit_mvt_type"
-                                )
-                                new_qte = st.number_input(
-                                    "⚖️ Quantité (kg) *",
-                                    min_value=0.01,
-                                    value=float(mvt_qte or 0),
-                                    step=10.0,
-                                    key="edit_mvt_qte"
-                                )
-
-                            with e3:
-                                magasin_index = 0
-                                if mvt_magasin and mvt_magasin in magasins_noms:
-                                    magasin_index = magasins_noms.index(mvt_magasin)
-                                new_magasin = st.selectbox(
-                                    "🏢 Magasin destination *",
-                                    magasins_noms,
-                                    index=magasin_index,
-                                    key="edit_mvt_magasin"
-                                )
-
-                            e4, e5 = st.columns(2)
-                            with e4:
-                                new_origine = st.text_input(
-                                    "📍 Origine / Provenance",
-                                    value=mvt_origine or "",
-                                    key="edit_mvt_origine"
-                                )
-                                new_fournisseur = st.text_input(
-                                    "🤝 Fournisseur",
-                                    value=mvt_fournisseur or "",
-                                    key="edit_mvt_fournisseur"
-                                )
-                            with e5:
-                                new_id_contrat = st.text_input(
-                                    "📝 ID Contrat (optionnel)",
-                                    value=str(mvt_id_contrat) if mvt_id_contrat else "",
-                                    key="edit_mvt_id_contrat"
-                                )
-                                new_commentaire = st.text_area(
-                                    "💬 Commentaire",
-                                    value=mvt_commentaire or "",
-                                    height=100,
-                                    key="edit_mvt_commentaire"
-                                )
-
-                            st.markdown("---")
-                            st.info(
-                                "💡 **Rappel métier** : modifier le type ou la quantité d'un mouvement "
-                                "affecte l'historique du stock. Vérifiez bien avant de valider."
-                            )
-
-                            submit_edit = st.form_submit_button(
-                                "💾 Enregistrer les modifications",
-                                type="primary",
-                                use_container_width=True
-                            )
-
-                            if submit_edit:
-                                try:
-                                    new_datetime = datetime.combine(new_date, new_heure)
-                                    new_datetime_str = new_datetime.strftime("%Y-%m-%d %H:%M:%S")
-
-                                    if new_type == "Sortie":
-                                        row_check = fetch_one("""
-                                            SELECT COALESCE(SUM(
-                                                CASE WHEN type='Entrée' THEN quantite_kg
-                                                     WHEN type='Sortie' THEN -quantite_kg
-                                                     ELSE 0 END
-                                            ), 0)
-                                            FROM stock
-                                            WHERE magasin_destination = %s
-                                              AND id != %s
-                                        """, (new_magasin, mvt_id))
-                                        stock_hors_mvt = float(row_check[0]) if row_check else 0.0
-
-                                        if stock_hors_mvt - new_qte < 0:
-                                            st.error(
-                                                f"❌ Impossible : cette modification ferait passer le stock de "
-                                                f"**{new_magasin}** en négatif.\n\n"
-                                                f"Stock hors ce mouvement : **{stock_hors_mvt:,.2f} kg** — "
-                                                f"Quantité demandée : **{new_qte:,.2f} kg**."
-                                            )
-                                            st.stop()
-
-                                    with conn.cursor() as cur:
-                                        cur.execute("""
-                                            UPDATE stock
-                                            SET date = %s,
-                                                type = %s,
-                                                quantite_kg = %s,
-                                                origine = %s,
-                                                magasin_destination = %s,
-                                                fournisseur = %s,
-                                                id_contrat = %s,
-                                                commentaire = %s
-                                            WHERE id = %s
-                                        """, (
-                                            new_datetime_str,
-                                            new_type,
-                                            new_qte,
-                                            new_origine or None,
-                                            new_magasin,
-                                            new_fournisseur or None,
-                                            new_id_contrat or None,
-                                            new_commentaire or None,
-                                            mvt_id
-                                        ))
-                                        conn.commit()
-
-                                    if 'get_stock_actuel' in globals():
-                                        get_stock_actuel.clear()
-
-                                    log_action(
-                                        f"✏️ MODIFICATION mouvement stock ID {mvt_id} : "
-                                        f"{mvt_type} {mvt_qte} kg → {new_type} {new_qte} kg "
-                                        f"({mvt_magasin} → {new_magasin})"
-                                    )
-                                    st.success(f"✅ Mouvement ID `{mvt_id}` modifié avec succès !")
-                                    st.rerun()
-
-                                except Exception as e:
-                                    conn.rollback()
-                                    st.error(f"❌ Erreur lors de la modification : {e}")
-
-                    # -------------------------------------------------------------
-                    # ONGLET SUPPRIMER
-                    # -------------------------------------------------------------
-                    with tab_del:
-                        st.markdown(f"**Suppression du mouvement ID `{mvt_id}`**")
-                        st.error(
-                            "⚠️ La suppression est **définitive** et ne peut pas être annulée.\n\n"
-                            "Utilisez la suppression uniquement pour corriger une **erreur de saisie** "
-                            "(doublon, mauvais magasin, mauvaise quantité)."
-                        )
-
-                        st.markdown(f"""
-                        <div style="
-                            background: #FEF2F2;
-                            border: 1px solid #FECACA;
-                            border-radius: 10px;
-                            padding: 14px 18px;
-                            margin: 10px 0;
-                        ">
-                            <div style="font-size:12px; color:#991B1B; font-weight:700;
-                                        letter-spacing:1px; margin-bottom:8px;">
-                                MOUVEMENT À SUPPRIMER
-                            </div>
-                            <div style="font-size:13px; color:#7F1D1D; line-height:1.7;">
-                                <b>Type :</b> {mvt_type}<br>
-                                <b>Date :</b> {date_valeur.strftime('%d/%m/%Y %H:%M')}<br>
-                                <b>Quantité :</b> {mvt_qte:,.2f} kg<br>
-                                <b>Magasin :</b> {mvt_magasin}<br>
-                                <b>Origine :</b> {mvt_origine or '—'}<br>
-                                <b>Fournisseur :</b> {mvt_fournisseur or '—'}<br>
-                                <b>Commentaire :</b> {mvt_commentaire or '—'}
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        confirmation = st.text_input(
-                            "🔐 Tapez le mot **SUPPRIMER** pour confirmer",
-                            placeholder="SUPPRIMER",
-                            key="confirm_delete_mvt"
-                        )
-
-                        col_del1, col_del2 = st.columns(2)
-
-                        with col_del1:
-                            if st.button(
-                                "🗑️ Confirmer la suppression",
-                                type="primary",
-                                use_container_width=True,
-                                disabled=(confirmation.strip().upper() != "SUPPRIMER"),
-                                key="btn_confirm_del_mvt"
-                            ):
-                                try:
-                                    with conn.cursor() as cur:
-                                        cur.execute("DELETE FROM stock WHERE id = %s", (mvt_id,))
-                                        conn.commit()
-
-                                    if 'get_stock_actuel' in globals():
-                                        get_stock_actuel.clear()
-
-                                    log_action(
-                                        f"🗑️ SUPPRESSION mouvement stock ID {mvt_id} "
-                                        f"({mvt_type} {mvt_qte} kg - {mvt_magasin})"
-                                    )
-                                    st.success(f"✅ Mouvement ID `{mvt_id}` supprimé définitivement.")
-                                    st.rerun()
-                                except Exception as e:
-                                    conn.rollback()
-                                    st.error(f"❌ Erreur lors de la suppression : {e}")
-
-                        with col_del2:
-                            if confirmation.strip().upper() != "SUPPRIMER":
-                                st.caption("🔒 Saisie incorrecte — le bouton reste désactivé.")
-                            else:
-                                st.caption("✅ Confirmation validée. Cliquez pour supprimer.")
-
-        # Graphique des flux
-    st.divider()
-    st.subheader("📈 Évolution des flux sur la période")
-    if 'df_journal' in locals() and not df_journal.empty:
-        df_journal['date'] = pd.to_datetime(df_journal['date'], errors='coerce')
-        df_journal = df_journal.dropna(subset=['date'])
-        df_journal['quantite_kg'] = pd.to_numeric(df_journal['quantite_kg'], errors='coerce').fillna(0.0)
-        df_flux = (
-            df_journal
-            .groupby([pd.Grouper(key='date', freq='D'), 'type'])['quantite_kg']
-            .sum()
-            .unstack()
-            .fillna(0)
-        )
-        if not df_flux.empty:
-            fig_flux = go.Figure()
-            for colonne in df_flux.columns:
-                x_values = df_flux.index.to_pydatetime().tolist()
-                y_values = pd.to_numeric(df_flux[colonne], errors='coerce').fillna(0).astype(float).tolist()
-                fig_flux.add_trace(go.Scatter(x=x_values, y=y_values, mode='lines+markers', name=str(colonne)))
-            fig_flux.update_layout(
-                title="Évolution des flux de stock",
-                xaxis_title="Date",
-                yaxis_title="Quantité (kg)",
-                hovermode="x unified",
-                height=450,
-                margin=dict(l=20, r=20, t=60, b=20)
-            )
-            st.plotly_chart(fig_flux, use_container_width=True, key="flux_stock_evolution")
-        else:
-            st.info("Pas assez de données pour le graphique.")
-    else:
-        st.info("Pas de données pour le graphique.")
 # ==============================================================================
 # 1. CODE DE L'ONGLET CONTRATS
 # ==============================================================================
