@@ -3921,24 +3921,24 @@ if choix == "🏠 Tableau de Bord":
             else:
                 stock_actuel = 0.0
 
-            # --- Taux de change (à personnaliser) ---
-            TAUX_CHANGE = {
-                'XAF': 1.0,
-                'EUR': 655.957,   # 1 EUR = 655.957 XAF
-                'USD': 600.0,     # Exemple, à ajuster
-                'GBP': 750.0,     # Exemple
-            }
-    
-            # Calcul du total des ventes en FCFA (pour la balance)
-            tot_ventes_xaf = 0.0
-            for devise, montant in ventes_par_devise.items():
-                tot_ventes_xaf += montant * TAUX_CHANGE.get(devise, 1.0)
-    
-            benefice_brut = tot_ventes_xaf - tot_achats
-    
-        except Exception as e:
-            st.error(f"❌ Erreur lors du chargement des données du tableau de bord : {e}")
-            st.stop()
+        # --- Taux de change (à personnaliser) ---
+        TAUX_CHANGE = {
+            'XAF': 1.0,
+            'EUR': 655.957,   # 1 EUR = 655.957 XAF
+            'USD': 600.0,     # Exemple, à ajuster
+            'GBP': 750.0,     # Exemple
+        }
+
+        # Calcul du total des ventes en FCFA (pour la balance)
+        tot_ventes_xaf = 0.0
+        for devise, montant in ventes_par_devise.items():
+            tot_ventes_xaf += montant * TAUX_CHANGE.get(devise, 1.0)
+
+        benefice_brut = tot_ventes_xaf - tot_achats
+
+    except Exception as e:
+        st.error(f"❌ Erreur lors du chargement des données du tableau de bord : {e}")
+        st.stop()
 
     # ---------------------------------------------------------
     # 3. AFFICHAGE DES KPIS (avec devises pour les ventes)
