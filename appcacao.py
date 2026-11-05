@@ -8315,7 +8315,7 @@ elif choix == "📦 Mouvements de Stock":
             LIMIT 20
         """)
 
-alertes = [a for a in alertes if 0 < float(a[2]) < float(a[3]) * 0.10]
+        alertes = [a for a in alertes if 0 < float(a[2]) < float(a[3]) * 0.10]
 
         if alertes:
             st.markdown("### 🚨 Alertes Stock Faible")
