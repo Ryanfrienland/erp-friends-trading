@@ -11029,6 +11029,61 @@ elif choix == "🏪 Magasins":
                     col_r1.metric("Poids Net Base", f"{poids_net_base:,.2f} kg")
                     col_r2.metric("Total Réfactions", f"- {total_ref:,.2f} kg")
                     col_r3.metric("POIDS NET PAYABLE", f"{poids_net_paye:,.2f} kg", delta=statut_qualite)
+                    # ============================================================
+                    # 🔧 AJUSTEMENT MANUEL DU POIDS NET PAYABLE (négociation gré à gré)
+                    # ============================================================
+                    st.markdown("---")
+                    st.markdown("### ✍️ Ajustement manuel du Poids Net Payable")
+                    st.caption(
+                        "Si un accord a été trouvé avec le cabinet d'expertise ou le fournisseur "
+                        "en dehors du barème automatique, saisissez ici le poids net payable retenu."
+                    )
+                    
+                    col_auto, col_manu = st.columns(2)
+                    
+                    with col_auto:
+                        st.metric(
+                            "Poids Net Payable (calcul auto)",
+                            f"{poids_net_paye:,.2f} kg",
+                            delta=f"{total_ref:,.2f} kg de réfaction"
+                        )
+                    
+                    with col_manu:
+                        poids_net_paye_ajuste = st.number_input(
+                            "Poids Net Payable retenu après négociation (kg) *",
+                            min_value=0.0,
+                            max_value=float(poids_net_base),
+                            value=float(poids_net_paye),
+                            step=10.0,
+                            key="an_poids_net_paye_ajuste",
+                            help="Valeur par défaut = calcul automatique. Modifiez-la si un accord amiable a été trouvé."
+                        )
+                    
+                    # Recalcul du total de réfaction en fonction de l'ajustement
+                    total_ref_ajuste = poids_net_base - poids_net_paye_ajuste
+                    ecart_negociation = poids_net_paye_ajuste - poids_net_paye
+                    
+                    if abs(ecart_negociation) > 0.01:
+                        st.warning(
+                            f"⚠️ Écart avec le calcul automatique : **{ecart_negociation:+,.2f} kg** "
+                            f"(réfaction totale retenue : {total_ref_ajuste:,.2f} kg au lieu de {total_ref:,.2f} kg)"
+                        )
+                    
+                    # Motif de l'ajustement (obligatoire si écart)
+                    motif_ajustement = ""
+                    if abs(ecart_negociation) > 0.01:
+                        motif_ajustement = st.text_area(
+                            "📝 Motif de l'ajustement (négociation, accord amiable, expertise contradictoire...) *",
+                            key="an_motif_ajustement",
+                            height=70,
+                            placeholder="Ex: Accord avec SGS sur réfaction forfaitaire de 1.5% suite à expertise contradictoire du 15/01/2026."
+                        )
+                        if not motif_ajustement.strip():
+                            st.info("💡 Le motif est obligatoire pour valider un ajustement manuel.")
+                    
+                    # On remplace les variables utilisées plus bas
+                    poids_net_paye_final = poids_net_paye_ajuste
+                    total_ref_final = total_ref_ajuste
 
                     with st.expander("📋 Détail des réfactions appliquées"):
                         st.write("**Déductions :**")
@@ -11169,17 +11224,30 @@ elif choix == "🏪 Magasins":
                                         }
                                         insert_dict(cur, "analyses_qualite", data_analyse)
                                         # Mise à jour de l'achat et du stock
+                                        if abs(ecart_negociation) > 0.01 and not motif_ajustement.strip():
+                                            st.error("❌ Veuillez renseigner le motif de l'ajustement manuel.")
+                                            st.stop()
+                                        
                                         cur.execute("""
                                             UPDATE achats
                                             SET poids_net_paye = %s,
-                                                quantite_kg = %s
+                                                quantite_kg = %s,
+                                                deductions = %s,
+                                                libelle_deductions = %s
                                             WHERE id = %s
-                                        """, (poids_net_paye, poids_net_paye, infos["id_achat"]))
+                                        """, (
+                                            poids_net_paye_final, 
+                                            poids_net_paye_final, 
+                                            total_ref_final,
+                                            f"Ajustement manuel analyse : {motif_ajustement.strip()}" if ecart_negociation > 0.01 else "Réfaction calcul auto",
+                                            infos["id_achat"]
+                                        ))
+                                        
                                         cur.execute("""
                                             UPDATE stock
                                             SET refaction = %s
                                             WHERE id_achat = %s
-                                        """, (total_ref, infos["id_achat"]))
+                                        """, (total_ref_final, infos["id_achat"]))
 
                                     conn.commit()
 
@@ -11205,8 +11273,8 @@ elif choix == "🏪 Magasins":
                                         "type_bulletin": type_bulletin,
                                         "ref_humidite": ref_humidite, "ref_debris": ref_debris,
                                         "ref_etrangers": ref_etrangers, "ref_plates": ref_plates,
-                                        "ref_mdc": ref_mdc, "total_ref": total_ref,
-                                        "poids_net_paye": poids_net_paye,
+                                        "ref_mdc": ref_mdc, "total_ref": total_ref_final,
+                                        "poids_net_paye": poids_net_paye_final,
                                         "coeff_applique": deductions.get('coeff_applique', 0.0),
                                         "plafond_applique": deductions.get('plafond_applique', 0),
                                         "plafond_pourcentage": deductions.get('plafond_pourcentage', 0.0),
