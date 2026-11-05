@@ -2330,6 +2330,24 @@ def email_deja_envoye_aujourdhui() -> bool:
         return (row[0] > 0) if row else False
     except Exception:
         return False
+
+def sync_stock_apres_vente(numero_lot, quantite_livree):
+    """
+    Met à jour stock_par_magasin.quantite_livree quand une vente est livrée.
+    À appeler après chaque UPDATE de ventes.statut_livraison = 'Livré'.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE stock_par_magasin
+                SET quantite_livree = quantite_livree + %s,
+                    date_derniere_maj = CURRENT_TIMESTAMP
+                WHERE numero_lot = %s
+            """, (quantite_livree, numero_lot))
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Erreur sync stock après vente : {e}")
     
 def generer_bon_reception_pdf(data, filename=None):
     num_br = data.get('num_br', 'BR-TEMP')
@@ -8161,15 +8179,30 @@ elif choix == "📦 Mouvements de Stock":
     try:
         bilan = fetch_one("""
             SELECT
-                COALESCE(SUM(poids_brut_recu), 0),
-                COALESCE(SUM(poids_net_recu), 0),
-                COALESCE(SUM(refaction), 0),
-                COALESCE(SUM(poids_net_payable), 0),
-                COALESCE(SUM(quantite_livree), 0),
-                COALESCE(SUM(quantite_transferee_in), 0),
-                COALESCE(SUM(quantite_transferee_out), 0),
-                COALESCE(SUM(stock_disponible), 0)
-            FROM stock_par_magasin
+                COALESCE(SUM(spm.poids_brut_recu), 0),
+                COALESCE(SUM(spm.poids_net_recu), 0),
+                COALESCE(SUM(spm.refaction), 0),
+                COALESCE(SUM(spm.poids_net_payable), 0),
+                -- 🆕 Livré depuis ventes
+                COALESCE((
+                    SELECT SUM(v.quantite_kg) 
+                    FROM ventes v 
+                    WHERE v.statut_livraison = 'Livré'
+                ), 0),
+                COALESCE(SUM(spm.quantite_transferee_in), 0),
+                COALESCE(SUM(spm.quantite_transferee_out), 0),
+                -- 🆕 Stock dispo = payable + transf_in - transf_out - livré (calculé direct)
+                GREATEST(0,
+                    COALESCE(SUM(spm.poids_net_payable), 0)
+                    + COALESCE(SUM(spm.quantite_transferee_in), 0)
+                    - COALESCE(SUM(spm.quantite_transferee_out), 0)
+                    - COALESCE((
+                        SELECT SUM(v.quantite_kg) 
+                        FROM ventes v 
+                        WHERE v.statut_livraison = 'Livré'
+                    ), 0)
+                )
+            FROM stock_par_magasin spm
         """)
 
         if bilan:
@@ -8259,15 +8292,30 @@ elif choix == "📦 Mouvements de Stock":
     # =========================================================
     try:
         alertes = fetch_all("""
-            SELECT spm.magasin, spm.numero_lot, spm.stock_disponible, m.capacite_kg
+            SELECT 
+                spm.magasin, 
+                spm.numero_lot,
+                GREATEST(0,
+                    spm.poids_net_payable
+                    + spm.quantite_transferee_in
+                    - spm.quantite_transferee_out
+                    - COALESCE((
+                        SELECT SUM(v.quantite_kg)
+                        FROM ventes v
+                        WHERE v.numero_lot_source = spm.numero_lot
+                          AND v.statut_livraison = 'Livré'
+                    ), 0)
+                ) AS stock_reel,
+                m.capacite_kg
             FROM stock_par_magasin spm
             LEFT JOIN magasins m ON m.nom = spm.magasin
-            WHERE spm.stock_disponible > 0
+            WHERE spm.poids_net_payable > 0
               AND m.capacite_kg > 0
-              AND spm.stock_disponible < (m.capacite_kg * 0.10)
-            ORDER BY spm.stock_disponible ASC
-            LIMIT 10
+            ORDER BY stock_reel ASC
+            LIMIT 20
         """)
+
+alertes = [a for a in alertes if 0 < float(a[2]) < float(a[3]) * 0.10]
 
         if alertes:
             st.markdown("### 🚨 Alertes Stock Faible")
@@ -8295,23 +8343,40 @@ elif choix == "📦 Mouvements de Stock":
     st.markdown("### 🏢 Stock détaillé par magasin et par lot")
 
     df_stock = get_dataframe_from_query("""
-        SELECT
-            spm.id,
-            spm.magasin,
-            spm.numero_lot,
-            spm.poids_brut_recu,
-            spm.poids_net_recu,
-            spm.refaction,
-            spm.poids_net_payable,
-            spm.quantite_livree,
-            spm.quantite_transferee_in,
-            spm.quantite_transferee_out,
-            spm.stock_disponible,
-            spm.date_derniere_maj
-        FROM stock_par_magasin spm
-        WHERE spm.poids_net_payable > 0 OR spm.stock_disponible > 0
-        ORDER BY spm.magasin, spm.stock_disponible DESC
-    """)
+    SELECT
+        spm.id,
+        spm.magasin,
+        spm.numero_lot,
+        spm.poids_brut_recu,
+        spm.poids_net_recu,
+        spm.refaction,
+        spm.poids_net_payable,
+        -- 🆕 Calcul dynamique des livraisons depuis ventes
+        COALESCE((
+            SELECT SUM(v.quantite_kg)
+            FROM ventes v
+            WHERE v.numero_lot_source = spm.numero_lot
+              AND v.statut_livraison = 'Livré'
+        ), 0) AS quantite_livree,
+        spm.quantite_transferee_in,
+        spm.quantite_transferee_out,
+        -- 🆕 Stock dispo recalculé en direct
+        GREATEST(0,
+            spm.poids_net_payable
+            + spm.quantite_transferee_in
+            - spm.quantite_transferee_out
+            - COALESCE((
+                SELECT SUM(v.quantite_kg)
+                FROM ventes v
+                WHERE v.numero_lot_source = spm.numero_lot
+                  AND v.statut_livraison = 'Livré'
+            ), 0)
+        ) AS stock_disponible,
+        spm.date_derniere_maj
+    FROM stock_par_magasin spm
+    WHERE spm.poids_net_payable > 0
+    ORDER BY spm.magasin, spm.stock_disponible DESC
+""")
 
     if df_stock.empty:
         st.info("ℹ️ Aucun stock enregistré pour le moment.")
@@ -8455,10 +8520,25 @@ elif choix == "📦 Mouvements de Stock":
     with st.expander("🛠️ Effectuer un ajustement", expanded=False):
         try:
             rows_ajust = fetch_all("""
-                SELECT id, magasin, numero_lot, stock_disponible, poids_net_payable
-                FROM stock_par_magasin
-                WHERE poids_net_payable > 0
-                ORDER BY magasin, numero_lot DESC
+                SELECT 
+                    spm.id,
+                    spm.magasin,
+                    spm.numero_lot,
+                    GREATEST(0,
+                        spm.poids_net_payable
+                        + spm.quantite_transferee_in
+                        - spm.quantite_transferee_out
+                        - COALESCE((
+                            SELECT SUM(v.quantite_kg)
+                            FROM ventes v
+                            WHERE v.numero_lot_source = spm.numero_lot
+                              AND v.statut_livraison = 'Livré'
+                        ), 0)
+                    ) AS stock_dispo_reel,
+                    spm.poids_net_payable
+                FROM stock_par_magasin spm
+                WHERE spm.poids_net_payable > 0
+                ORDER BY spm.magasin, spm.numero_lot DESC
             """)
 
             if not rows_ajust:
@@ -9856,9 +9936,22 @@ elif choix == "🏪 Magasins":
     
     # --- TABLEAU DE BORD EXPRESS ---
     total_magasins = get_single_value("SELECT COUNT(*) FROM magasins", 0)
-    total_stock_entree = get_single_value("SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE type = 'Entrée'", 0)
-    total_stock_sortie = get_single_value("SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE type = 'Sortie'", 0)
-    stock_physique_total = total_stock_entree - total_stock_sortie
+    
+    # 🆕 Source unique de vérité : stock_par_magasin + ventes
+    kpi_stock = fetch_one("""
+        SELECT
+            COALESCE(SUM(spm.poids_net_payable), 0) 
+                + COALESCE(SUM(spm.quantite_transferee_in), 0) 
+                - COALESCE(SUM(spm.quantite_transferee_out), 0)
+                - COALESCE((SELECT SUM(v.quantite_kg) FROM ventes v WHERE v.statut_livraison = 'Livré'), 0) 
+                AS stock_dispo_total,
+            COALESCE((SELECT SUM(v.quantite_kg) FROM ventes v WHERE v.statut_livraison = 'Livré'), 0) 
+                AS total_sorties
+        FROM stock_par_magasin spm
+    """)
+    
+    stock_physique_total = float(kpi_stock[0] or 0) if kpi_stock else 0.0
+    total_stock_sortie = float(kpi_stock[1] or 0) if kpi_stock else 0.0
     
     col_stat1, col_stat2, col_stat3 = st.columns(3)
     col_stat1.metric(label="🏗️ Magasins Actifs", value=total_magasins)
@@ -10172,6 +10265,12 @@ elif choix == "🏪 Magasins":
                                     
                                     cur.execute("UPDATE ventes SET statut_livraison = 'Livré' WHERE id = %s", (id_vente_sel,))
                                     conn.commit()
+                                    lot_vente = fetch_one(
+                                        "SELECT numero_lot_source FROM ventes WHERE id = %s",
+                                        (id_vente_sel,)
+                                    )
+                                    if lot_vente and lot_vente[0]:
+                                        sync_stock_apres_vente(lot_vente[0], poids_a_sortir)
 
                                 data_bl = {
                                     "num_bl": num_bl_genere,
@@ -10213,17 +10312,25 @@ elif choix == "🏪 Magasins":
                 m.emplacement, 
                 m.capacite_kg, 
                 m.responsable,
+                -- 🆕 Stock réel par magasin (aligné avec Mouvements de Stock)
                 COALESCE((
-                    SELECT SUM(quantite_kg) FROM stock 
-                    WHERE magasin_destination = m.nom AND type = 'Entrée'
-                ), 0) 
-                - COALESCE((
-                    SELECT SUM(quantite_kg) FROM stock 
-                    WHERE magasin_destination = m.nom AND type = 'Sortie'
+                    SELECT SUM(
+                        spm.poids_net_payable
+                        + spm.quantite_transferee_in
+                        - spm.quantite_transferee_out
+                        - COALESCE((
+                            SELECT SUM(v.quantite_kg)
+                            FROM ventes v
+                            WHERE v.numero_lot_source = spm.numero_lot
+                              AND v.statut_livraison = 'Livré'
+                        ), 0)
+                    )
+                    FROM stock_par_magasin spm
+                    WHERE spm.magasin = m.nom
                 ), 0) AS stock_actuel
             FROM magasins m
             ORDER BY m.id DESC
-        """
+        """  
         df_magasins = get_dataframe_from_query(query_magasins)
         
         if not df_magasins.empty:
