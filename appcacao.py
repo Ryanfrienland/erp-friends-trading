@@ -8288,6 +8288,47 @@ elif choix == "📦 Mouvements de Stock":
     st.divider()
 
     # =========================================================
+    # 🆕 AUDIT ET RÉPARATION AUTOMATIQUE DU STOCK
+    # =========================================================
+    try:
+        audit = fetch_one("""
+            SELECT COUNT(*) FROM (
+                SELECT spm.id
+                FROM stock_par_magasin spm
+                WHERE ABS(
+                    spm.quantite_livree - COALESCE((
+                        SELECT SUM(v.quantite_kg)
+                        FROM ventes v
+                        WHERE v.numero_lot_source = spm.numero_lot
+                          AND v.statut_livraison = 'Livré'
+                    ), 0)
+                ) > 0.01
+            ) AS incoherences
+        """)
+        nb_incoh = int(audit[0] or 0) if audit else 0
+        if nb_incoh > 0:
+            st.warning(
+                f"⚠️ **{nb_incoh} lot(s)** ont un écart entre le stock enregistré "
+                f"et les ventes réelles. Cliquez ci-dessous pour réparer."
+            )
+            if st.button("🔄 Resynchroniser les stocks depuis les ventes", type="primary"):
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE stock_par_magasin spm
+                        SET quantite_livree = COALESCE((
+                            SELECT SUM(v.quantite_kg)
+                            FROM ventes v
+                            WHERE v.numero_lot_source = spm.numero_lot
+                              AND v.statut_livraison = 'Livré'
+                        ), 0),
+                        date_derniere_maj = CURRENT_TIMESTAMP
+                    """)
+                    conn.commit()
+                st.success(f"✅ {nb_incoh} lot(s) resynchronisé(s) avec succès !")
+                st.rerun()
+    except Exception as e:
+        logging.error(f"Erreur audit cohérence : {e}")
+    # =========================================================
     # SECTION 2 : ALERTES AUTOMATIQUES (STOCK FAIBLE)
     # =========================================================
     try:
