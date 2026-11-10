@@ -338,10 +338,11 @@ def _url_verification(reference: str, code: str) -> str:
 
 def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str,
                        x_qr: float = 45, y_qr: float = 170, largeur_qr: float = 70) -> bytes:
-    # ✅ On encode l'URL de vérification, pas juste REF|CODE
+    # On encode l'URL de vérification, pas juste REF|CODE
     contenu_qr = _url_verification(reference, code_verification)
     qr_img = generer_qr_code(contenu_qr, taille=160)
 
+    # --- Création de l'overlay (QR + texte) ---
     overlay_buffer = BytesIO()
     c = canvas.Canvas(overlay_buffer, pagesize=A4)
     c.drawImage(ImageReader(qr_img), x_qr, y_qr, width=largeur_qr, height=largeur_qr)
@@ -354,12 +355,17 @@ def apposer_qr_sur_pdf(pdf_bytes: bytes, code_verification: str, reference: str,
 
     pdf_original = PdfReader(BytesIO(pdf_bytes))
     pdf_overlay = PdfReader(overlay_buffer)
+
     writer = PdfWriter()
     nb_pages = len(pdf_original.pages)
+
     for i, page in enumerate(pdf_original.pages):
+        # 1) On rattache d'abord la page au writer
+        page_writer = writer.add_page(page)
+        # 2) Puis on fusionne l'overlay sur la page DÉJÀ attachée
         if i == nb_pages - 1:
-            page.merge_page(pdf_overlay.pages[0])
-        writer.add_page(page)
+            page_writer.merge_page(pdf_overlay.pages[0])
+
     resultat = BytesIO()
     writer.write(resultat)
     return resultat.getvalue()
