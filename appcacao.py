@@ -4336,376 +4336,376 @@ if choix == "🏠 Tableau de Bord":
                     logging.error(f"Erreur recherche ventes: {e}")
                     
 elif choix == "🧾 Achats (Entrees)":
-    st.title("🧾 Gestion des Achats & Suivi Reste à Payer")
-    st.markdown("Gérez vos acquisitions, éditez vos documents officiels et suivez vos dettes fournisseurs de manière centralisée.")
+    st.title("🧾 Facturation des Réceptions")
+    st.markdown(
+        "Transformez un Bon de Réception (BR) en facture fournisseur. "
+        "**La réception physique se fait dans 🏪 Magasins → 📥 RÉCEPTION (BR)**."
+    )
     st.divider()
-    
+
     if "dernier_achat_traite" not in st.session_state:
         st.session_state.dernier_achat_traite = ""
-        
-    tab1, tab2, tab3 = st.tabs(["🛒 Nouvel Achat", "📄 Historique & Documents", "💸 Règlement des Dettes"])
-    
-    # Récupération des magasins (curseur local)
-    magasins_liste = fetch_all("SELECT nom FROM magasins")
-    liste_noms_magasins = [m[0] for m in magasins_liste]
+
+    tab1, tab2, tab3 = st.tabs([
+        "🛒 Facturer un BR",
+        "📄 Historique & Documents",
+        "💸 Règlement des Dettes"
+    ])
 
     # ==========================================
-    # TAB 1 : NOUVEL ACHAT / FACTURATION
+    # TAB 1 : FACTURATION D'UN BR
     # ==========================================
     with tab1:
-        st.markdown("### 🛠️ Mode d'Acquisition")
-        analyse_existe = False
-        analyse_data = None
-        poids_net_paye = 0.0
+        st.markdown("### 🛠️ Facturation d'un Bon de Réception")
 
-        with st.container(border=True):
-            type_achat = st.radio(
-                "Comment souhaitez-vous enregistrer cette entrée ?",
-                ["📥 Facturer un BR / Pesée en attente", "📜 Achat lié à un Contrat", "🛒 Achat Direct (Spot)"],
-                horizontal=True,
-                label_visibility="collapsed"
-            )
+        st.info(
+            "💡 **Workflow normal :**\n"
+            "1. Le camion arrive → **🏪 Magasins → 📥 RÉCEPTION (BR)**\n"
+            "2. L'échantillon est analysé → **🧪 Unité d'Analyse**\n"
+            "3. **Ici** → vous facturez le lot analysé\n\n"
+            "❓ **Aucun BR disponible ?** Allez d'abord réceptionner le camion dans "
+            "**🏪 Magasins → 📥 RÉCEPTION (BR)**."
+        )
 
-        # Fournisseurs
-        fournisseurs_dispo = fetch_all("SELECT id, nom FROM fournisseurs")
-        dict_f = {f[1]: f[0] for f in fournisseurs_dispo} if fournisseurs_dispo else {}
-
-        # Contrats actifs
-        contrats_dispo = fetch_all("""
-            SELECT c.id, c.numero_contrat, f.nom, f.id, c.prix_unitaire, c.date_signature
-            FROM contrats c JOIN fournisseurs f ON c.id_fournisseur = f.id
-            WHERE c.statut IN ('Actif', 'VALIDE') ORDER BY c.id DESC
-        """)
-        dict_c = {f"Contrat {c[1]} — {c[2]} (P.U: {c[4]:,.0f} FCFA)": c for c in contrats_dispo} if contrats_dispo else {}
-
-        # BR en attente
+        # ============================================================
+        # RÉCUPÉRATION DES BR EN ATTENTE
+        # ============================================================
         br_en_attente = fetch_all("""
-            SELECT a.id, a.numero_de_lot, f.nom, a.quantite_kg, a.date, a.numero_contrat, 
-                   a.poids_brut, a.poids_net, a.nombre_de_sacs, a.id_fournisseur, a.poids_net_paye
+            SELECT 
+                a.id, a.numero_de_lot, f.nom, a.quantite_kg, a.date, 
+                a.numero_contrat, a.poids_brut, a.poids_net, a.nombre_de_sacs, 
+                a.id_fournisseur, a.poids_net_paye, a.numero_br
             FROM achats a 
             JOIN fournisseurs f ON a.id_fournisseur = f.id
             WHERE a.statut = 'En attente de facturation' 
             ORDER BY a.id DESC
         """)
-        dict_br = {f"Contrat: {b[5]} | Lot: {b[1]} | {b[2]} | {b[3]} kg (Reçu le {b[4]})": b for b in br_en_attente} if br_en_attente else {}
 
-        # Numéro de lot auto
-        try:
-            next_achat_id_row = fetch_one("SELECT COALESCE(MAX(id), 0) + 1 FROM achats")
-            next_achat_id = next_achat_id_row[0] if next_achat_id_row else 1
-        except:
-            next_achat_id = 1
-        num_lot_auto = f"LOT-{datetime.now().strftime('%Y%m%d')}-{next_achat_id:04d}"
+        if not br_en_attente:
+            st.success("🎉 Aucun BR en attente de facturation. Tous les lots reçus sont facturés.")
+            st.markdown(
+                """
+                ### 📥 Prochaine étape
+                Rendez-vous dans **🏪 Magasins → 📥 RÉCEPTION (BR)** 
+                pour enregistrer l'arrivée d'un camion de cacao.
+                """
+            )
+            st.stop()
 
-        id_achat_br, ncc, nom_f, id_f = None, "ACHAT-SPOT", "", None
-        pu_contrat_par_defaut, qte_defaut, nds_defaut = 0.0, 0.0, 0
-        pb_defaut, pn_defaut, num_lot_valeur = "", "", num_lot_auto
-        qte_a_facturer = 0.0
-        id_contrat = None
+        # ============================================================
+        # SÉLECTION DU BR
+        # ============================================================
+        dict_br = {
+            f"BR {b[11] or 'N/A'} | Lot {b[1]} | {b[2]} | {b[3]:,.0f} kg "
+            f"(Reçu le {b[4]}) | Contrat: {b[5] or 'Spot'}": b
+            for b in br_en_attente
+        }
 
         with st.container(border=True):
-            if type_achat == "📥 Facturer un BR / Pesée en attente":
-                if not dict_br:
-                    st.success("🎉 Aucun lot en attente de facturation.")
-                else:
-                    br_selectionne = st.selectbox("Sélectionner le BR / Pesée à facturer *", list(dict_br.keys()))
-                    infos_br = dict_br[br_selectionne]
-                    id_achat_br, num_lot_valeur, nom_f, qte_defaut, date_br, ncc, pb_defaut, pn_defaut, nds_defaut, id_f, poids_net_paye = infos_br
+            br_selectionne = st.selectbox(
+                "📋 Sélectionner le BR à facturer *", 
+                list(dict_br.keys())
+            )
+            infos_br = dict_br[br_selectionne]
+            (
+                id_achat_br, num_lot_valeur, nom_f, qte_defaut, date_br, 
+                ncc, pb_defaut, pn_defaut, nds_defaut, id_f, poids_net_paye, num_br
+            ) = infos_br
 
-                    analyse_existe = False
-                    analyse_data = None
-                    if id_achat_br:
-                        row_analyse = fetch_one("""
-                            SELECT aq.taux_humidite, aq.taux_debris_tamisage, aq.taux_corps_etrangers,
-                                   aq.taux_feves_plates, aq.feves_moisies_pct, aq.feves_ardoisees_pct,
-                                   aq.feves_mitees_pct, aq.feves_germees_pct, aq.taux_crabots,
-                                   aq.taux_feves_brisees, aq.taux_fragments_coques,
-                                   a.poids_net_paye, aq.statut_qualite
-                            FROM analyses_qualite aq
-                            JOIN achats a ON aq.id_achat = a.id
-                            WHERE aq.id_achat = %s
-                        """, (id_achat_br,))
-                        if row_analyse:
-                            analyse_existe = True
-                            analyse_data = {
-                                "humidite": row_analyse[0],
-                                "debris": row_analyse[1],
-                                "etrangers": row_analyse[2],
-                                "plates": row_analyse[3],
-                                "moisies": row_analyse[4],
-                                "ardoises": row_analyse[5],
-                                "mitees": row_analyse[6],
-                                "germees": row_analyse[7],
-                                "crabots": row_analyse[8],
-                                "brisees": row_analyse[9],
-                                "frag": row_analyse[10],
-                                "poids_net_paye": row_analyse[11],
-                                "statut_qualite": row_analyse[12]
-                            }
-                            poids_net_paye = row_analyse[11] if row_analyse[11] else pn_defaut
+        # ============================================================
+        # ANALYSE QUALITÉ
+        # ============================================================
+        analyse_existe = False
+        analyse_data = None
 
-                    
-                    if not analyse_existe:
-                        st.warning(
-                            "⚠️ Ce lot n'a pas encore été analysé. "
-                            "Facturation impossible sans analyse."
-                        )
-                        st.info(
-                            "Veuillez vous rendre dans l'onglet "
-                            "'🧪 Unité d'Analyse'."
-                        )
-                    else:
-                        st.success(
-                            f"✅ Analyse qualité effectuée — "
-                            f"Statut : {analyse_data['statut_qualite']}"
-                        )
+        row_analyse = fetch_one("""
+            SELECT 
+                aq.taux_humidite, aq.taux_debris_tamisage, aq.taux_corps_etrangers,
+                aq.taux_feves_plates, aq.feves_moisies_pct, aq.feves_ardoisees_pct,
+                aq.feves_mitees_pct, aq.feves_germees_pct, aq.taux_crabots,
+                aq.taux_feves_brisees, aq.taux_fragments_coques,
+                a.poids_net_paye, aq.statut_qualite
+            FROM analyses_qualite aq
+            JOIN achats a ON aq.id_achat = a.id
+            WHERE aq.id_achat = %s
+        """, (id_achat_br,))
 
-                        with st.expander("📊 Détail des réfractions appliquées"):
-                            cols = st.columns(4)
-                            cols[0].metric(
-                                "Humidité",
-                                f"{analyse_data['humidite']:.1f} %"
-                            )
-                            cols[1].metric(
-                                "Débris tamisage",
-                                f"{analyse_data['debris']:.1f} %"
-                            )
-                            cols[2].metric(
-                                "Corps étrangers",
-                                f"{analyse_data['etrangers']:.1f} %"
-                            )
-                            cols[3].metric(
-                                "Fèves plates",
-                                f"{analyse_data['plates']:.1f} %"
-                            )
+        if row_analyse:
+            analyse_existe = True
+            analyse_data = {
+                "humidite": row_analyse[0],
+                "debris": row_analyse[1],
+                "etrangers": row_analyse[2],
+                "plates": row_analyse[3],
+                "moisies": row_analyse[4],
+                "ardoises": row_analyse[5],
+                "mitees": row_analyse[6],
+                "germees": row_analyse[7],
+                "crabots": row_analyse[8],
+                "brisees": row_analyse[9],
+                "frag": row_analyse[10],
+                "poids_net_paye": row_analyse[11],
+                "statut_qualite": row_analyse[12],
+            }
+            poids_net_paye = row_analyse[11] if row_analyse[11] else pn_defaut
 
-                            cols[0].metric(
-                                "Moisissures",
-                                f"{analyse_data['moisies']:.1f} %"
-                            )
-                            cols[1].metric(
-                                "Ardoises",
-                                f"{analyse_data['ardoises']:.1f} %"
-                            )
-                            cols[2].metric(
-                                "Autres défauts",
-                                f"{analyse_data['mitees'] + analyse_data['germees'] + analyse_data['crabots'] + analyse_data['brisees'] + analyse_data['frag']:.1f} %"
-                            )
-                            cols[3].metric(
-                                "Poids net payable",
-                                f"{poids_net_paye:,.2f} kg"
-                            )
+        if not analyse_existe:
+            st.warning(
+                "⚠️ **Ce lot n'a pas encore été analysé.** "
+                "La facturation est impossible sans analyse qualité."
+            )
+            st.info(
+                "👉 Rendez-vous dans **🏪 Magasins → 🧪 UNITÉ D'ANALYSE** "
+                "pour saisir les résultats d'analyse de ce lot."
+            )
+            st.stop()
 
-                        
-                    if ncc and ncc != "ACHAT-SPOT":
-                        row_c = fetch_one("SELECT prix_unitaire FROM contrats WHERE numero_contrat = %s", (ncc,))
-                        if row_c:
-                            pu_contrat_par_defaut = row_c[0]
-                            st.info(f"🔗 **Contrat {ncc}** : Prix unitaire verrouillé à **{pu_contrat_par_defaut:,.0f} FCFA/kg**.")
+        # Affichage du résumé analyse
+        with st.container(border=True):
+            st.success(
+                f"✅ **Analyse qualité effectuée** — "
+                f"Statut : **{analyse_data['statut_qualite']}**"
+            )
 
-            elif type_achat == "📜 Achat lié à un Contrat":
-                if not dict_c:
-                    st.warning("⚠️ Aucun contrat actif enregistré.")
-                else:
-                    contrat_selectionne = st.selectbox("Sélectionner le Contrat lié *", list(dict_c.keys()))
-                    infos_c = dict_c[contrat_selectionne]
-                    id_contrat, ncc, nom_f, id_f, pu_contrat_par_defaut, ddc = infos_c[0], infos_c[1], infos_c[2], infos_c[3], infos_c[4], infos_c[5]
-            else:
-                if not dict_f:
-                    st.warning("⚠️ Aucun fournisseur enregistré.")
-                else:
-                    f_selectionne = st.selectbox("Sélectionner le Fournisseur *", list(dict_f.keys()))
-                    ncc, nom_f, id_f, pu_contrat_par_defaut = "ACHAT-SPOT", f_selectionne, dict_f[f_selectionne], 0.0
+            with st.expander("📊 Détail des réfractions appliquées", expanded=False):
+                cols = st.columns(4)
+                cols[0].metric("Humidité", f"{analyse_data['humidite']:.1f} %")
+                cols[1].metric("Débris tamisage", f"{analyse_data['debris']:.1f} %")
+                cols[2].metric("Corps étrangers", f"{analyse_data['etrangers']:.1f} %")
+                cols[3].metric("Fèves plates", f"{analyse_data['plates']:.1f} %")
 
-        # Formulaire principal
-        with st.form("form_achat", clear_on_submit=True):
+                cols[0].metric("Moisissures", f"{analyse_data['moisies']:.1f} %")
+                cols[1].metric("Ardoises", f"{analyse_data['ardoises']:.1f} %")
+                cols[2].metric(
+                    "Autres défauts",
+                    f"{analyse_data['mitees'] + analyse_data['germees'] + analyse_data['crabots'] + analyse_data['brisees'] + analyse_data['frag']:.1f} %"
+                )
+                cols[3].metric(
+                    "⚖️ Poids net payable",
+                    f"{poids_net_paye:,.2f} kg"
+                )
+
+        # ============================================================
+        # RÉCUPÉRATION DU PRIX CONTRAT (si applicable)
+        # ============================================================
+        pu_contrat_par_defaut = 0.0
+        if ncc and ncc != "ACHAT-SPOT":
+            row_c = fetch_one(
+                "SELECT prix_unitaire FROM contrats WHERE numero_contrat = %s",
+                (ncc,)
+            )
+            if row_c:
+                pu_contrat_par_defaut = float(row_c[0])
+                st.info(
+                    f"🔗 **Contrat {ncc}** : Prix unitaire verrouillé à "
+                    f"**{pu_contrat_par_defaut:,.0f} FCFA/kg**."
+                )
+        else:
+            st.info("🛒 **Achat spot** : Saisissez librement le prix unitaire ci-dessous.")
+
+        # ============================================================
+        # FORMULAIRE DE FACTURATION
+        # ============================================================
+        with st.form("form_facturation_br", clear_on_submit=False):
             st.subheader("💵 Informations Financières")
+
             c1, c2, c3, c4 = st.columns(4)
             qte = c1.number_input(
-                "Qte Nette à facturer (kg) *",
+                "Qté Nette à facturer (kg) *",
                 min_value=0.0,
-                value=float(poids_net_paye) if analyse_existe and poids_net_paye > 0 else float(qte_a_facturer),
+                value=float(poids_net_paye) if poids_net_paye > 0 else 0.0,
                 step=50.0,
-                help="La quantité est fixée par le poids net payable issu de l'analyse."
+                disabled=True,
+                help="Fixée par l'analyse qualité — non modifiable."
             )
-            if analyse_existe:
-                st.info(f"💡 Le montant brut est calculé sur la base du poids net payable ({poids_net_paye:,.2f} kg) × prix unitaire.")
-            pu = c2.number_input("Prix Unitaire (FCFA) *", value=float(pu_contrat_par_defaut), step=50.0)
+            pu = c2.number_input(
+                "Prix Unitaire (FCFA) *",
+                min_value=0.0,
+                value=float(pu_contrat_par_defaut),
+                step=50.0,
+                disabled=(ncc != "ACHAT-SPOT" and pu_contrat_par_defaut > 0),
+                help="Verrouillé si contrat lié."
+            )
             statut = c3.selectbox("Statut Paiement", ["Paye", "Avance", "Non Paye"])
-            avance_saisie = c4.number_input("Montant Versé (Si Avance)", 0.0, step=5000.0)
+            avance_saisie = c4.number_input(
+                "Montant Versé (Si Avance)", 
+                min_value=0.0, 
+                step=5000.0
+            )
 
             st.markdown("---")
             st.subheader("📉 Frais & Déductions")
             f1, f2 = st.columns(2)
-            montant_deduction = f1.number_input("Montant à déduire (FCFA)", min_value=0.0, step=1000.0, help="Transport, Décote qualité...")
-            motif_deduction = f2.text_input("Motif détaillé", placeholder="Ex: Décote humidité > 8%...")
+            montant_deduction = f1.number_input(
+                "Montant à déduire (FCFA)", 
+                min_value=0.0, 
+                step=1000.0,
+                help="Transport, Décote qualité, etc."
+            )
+            motif_deduction = f2.text_input(
+                "Motif détaillé", 
+                placeholder="Ex: Décote humidité > 8%..."
+            )
 
             st.markdown("---")
             st.subheader("📦 Logistique & Stockage")
-            d1, d2, d3, d4, d5 = st.columns(5)
+            d1, d2, d3, d4 = st.columns(4)
             ndl = d1.text_input("Numéro de Lot", value=num_lot_valeur, disabled=True)
-            pb = d2.text_input("Poids Brut (kg)", value=str(pb_defaut))
-            pn = d3.text_input("Poids Net (kg)", value=str(pn_defaut))
-            nds = d4.number_input("Nombre de Sacs", min_value=0, value=int(nds_defaut), step=1)
-            
-            index_magasin = 0
-            if type_achat == "📥 Facturer un BR / Pesée en attente" and num_lot_valeur:
-                mag_associe = fetch_one("""
-                    SELECT magasin_destination FROM stock 
-                    WHERE (commentaire LIKE %s OR commentaire LIKE %s) AND type = 'Entrée'
-                """, (f"%Lot N°{num_lot_valeur}%", f"%Lot {num_lot_valeur}%"))
-                if mag_associe and mag_associe[0] in liste_noms_magasins:
-                    index_magasin = liste_noms_magasins.index(mag_associe[0])
+            pb = d2.text_input("Poids Brut (kg)", value=str(pb_defaut), disabled=True)
+            pn = d3.text_input("Poids Net (kg)", value=str(pn_defaut), disabled=True)
+            nds = d4.number_input(
+                "Nombre de Sacs", 
+                min_value=0, 
+                value=int(nds_defaut), 
+                step=1,
+                disabled=True
+            )
 
-            if liste_noms_magasins:
-                lieu = d5.selectbox("Magasin de Stockage *", liste_noms_magasins, index=index_magasin)
-            else:
-                d5.error("⚠️ Aucun magasin créé !")
-                lieu = None
+            # Localisation du magasin où le lot est stocké
+            mag_associe = fetch_one("""
+                SELECT magasin_destination FROM stock 
+                WHERE id_achat = %s AND type = 'Entrée'
+                ORDER BY id DESC LIMIT 1
+            """, (id_achat_br,))
+            magasin_stock = mag_associe[0] if mag_associe else "Non identifié"
+            st.caption(f"🏪 Magasin de stockage : **{magasin_stock}**")
 
             st.markdown("<br>", unsafe_allow_html=True)
-            submitted = st.form_submit_button("💰 Valider et Facturer ce Lot", type="primary", use_container_width=True) 
+            submitted = st.form_submit_button(
+                "💰 Valider la Facturation", 
+                type="primary", 
+                use_container_width=True
+            )
 
             if submitted:
                 total_brut = qte * pu
                 total_net = total_brut - montant_deduction
-                if type_achat == "📥 Facturer un BR / Pesée en attente" and not analyse_existe:
-                    st.error("❌ La facturation est impossible : ce lot n'a pas été analysé.")
-                    st.stop()
-                if id_f is None:
-                    st.error("❌ Sélectionnez un fournisseur, un contrat ou un bon de réception valide.")
-                elif qte <= 0 or pu <= 0:
-                    st.error("❌ La quantité et le prix unitaire doivent être > 0.")
-                elif lieu is None:
-                    st.error("❌ Enregistrez un magasin de stockage d'abord.")
+
+                if qte <= 0:
+                    st.error("❌ Quantité invalide.")
+                elif pu <= 0:
+                    st.error("❌ Le prix unitaire doit être supérieur à 0.")
                 elif statut == "Avance" and (avance_saisie <= 0 or avance_saisie >= total_net):
-                    st.error("❌ L'avance versée doit être entre 0 et le net à payer.")
+                    st.error("❌ L'avance versée doit être strictement comprise entre 0 et le net à payer.")
                 else:
                     empreinte_achat = f"{nom_f}_{qte}_{pu}_{ndl}"
                     if st.session_state.dernier_achat_traite == empreinte_achat:
                         st.warning("⚠️ Double soumission détectée.")
                     else:
-                        mt_avance = total_net if statut == "Paye" else (0.0 if statut == "Non Paye" else avance_saisie)
+                        mt_avance = (
+                            total_net if statut == "Paye" 
+                            else (0.0 if statut == "Non Paye" else avance_saisie)
+                        )
                         date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                         try:
                             with conn.cursor() as cur:
-                                if type_achat == "📥 Facturer un BR / Pesée en attente" and id_achat_br:
-                                    cur.execute("""
-                                        UPDATE achats
-                                        SET date = %s, quantite_kg = %s, prix_unitaire = %s, total = %s, statut = %s, 
-                                            montant_avance = %s, poids_brut = %s, poids_net = %s, nombre_de_sacs = %s, 
-                                            deductions = %s, libelle_deductions = %s, poids_net_paye = %s
-                                        WHERE id = %s
-                                    """, (date_now, qte, pu, total_net, statut, mt_avance, pb, pn, nds, montant_deduction, motif_deduction, qte, id_achat_br))
+                                # Mise à jour de l'achat : on passe de "En attente de facturation" 
+                                # au statut de paiement
+                                cur.execute("""
+                                    UPDATE achats
+                                    SET date = %s, quantite_kg = %s, prix_unitaire = %s, 
+                                        total = %s, statut = %s, montant_avance = %s,
+                                        deductions = %s, libelle_deductions = %s, 
+                                        poids_net_paye = %s
+                                    WHERE id = %s
+                                """, (
+                                    date_now, qte, pu, total_net, statut, mt_avance,
+                                    montant_deduction, motif_deduction, 
+                                    qte, id_achat_br
+                                ))
 
-                                    cur.execute("""
-                                        UPDATE stock
-                                        SET quantite_kg = %s, commentaire = %s
-                                        WHERE (commentaire LIKE %s OR commentaire LIKE %s) AND type = 'Entrée'
-                                    """, (qte, f"Lot {ndl} - Contrat: {ncc} - Fourn: {nom_f} (Facturé)", f"%Lot N°{ndl}%", f"%Lot {ndl}%"))
-                                    log_msg = f"Facturation finalisée - Lot {ndl} (Contrat {ncc})"
-                                else:
-                                    cur.execute("""
-                                        INSERT INTO achats (date, id_fournisseur, quantite_kg, prix_unitaire, total, statut, montant_avance, numero_de_lot, numero_contrat, poids_brut, poids_net, nombre_de_sacs, deductions, libelle_deductions)
-                                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                                        RETURNING id
-                                    """, (date_now, id_f, qte, pu, total_net, statut, mt_avance, ndl, ncc, pb, pn, nds, montant_deduction, motif_deduction))
-                                    id_achat = cur.fetchone()[0]
-
-                                    cur.execute("""
-                                        INSERT INTO stock (date, type, quantite_kg, origine, magasin_destination, commentaire) 
-                                        VALUES (%s,%s,%s,%s,%s,%s)
-                                    """, (date_now, "Entrée", qte, "Achat", lieu, f"Lot {ndl} - Contrat: {ncc} - Fourn: {nom_f} (Facturé direct)"))
-                                    log_msg = f"Achat direct ({ncc}) lot {ndl} chez {nom_f} (Stock : {lieu})"
-
+                                # Mise à jour du stock (quantité nette payable)
+                                cur.execute("""
+                                    UPDATE stock
+                                    SET quantite_kg = %s
+                                    WHERE id_achat = %s AND type = 'Entrée'
+                                """, (qte, id_achat_br))
                                 conn.commit()
+
                             if 'get_stock_actuel' in globals():
                                 get_stock_actuel.clear()
 
-                            log_action(log_msg)
+                            log_action(
+                                f"Facturation lot {ndl} (BR {num_br}) — "
+                                f"{total_net:,.0f} FCFA — Statut: {statut}"
+                            )
                             st.session_state.dernier_achat_traite = empreinte_achat
-                            st.success(f"✅ Lot {ndl} facturé ! Reste à payer : {total_net - mt_avance:,.0f} FCFA")
-                            
-                            # 🆕 Détecter un préfinancement disponible pour ce fournisseur
-                            # 🆕 Détecter un préfinancement disponible — AVEC matching contrat strict
+                            st.success(
+                                f"✅ Lot **{ndl}** facturé ! "
+                                f"Reste à payer : **{total_net - mt_avance:,.0f} FCFA**"
+                            )
+
+                            # ============================================================
+                            # DÉTECTION PRÉFINANCEMENT
+                            # ============================================================
                             if id_f:
-                                # Récupérer l'ID de l'achat (fix du bug id_achat_br = None en achat direct)
-                                _id_achat_courant = (
-                                    id_achat_br 
-                                    if type_achat == "📥 Facturer un BR / Pesée en attente" 
-                                    else locals().get("id_achat")
-                                )
-                                
-                                # Déterminer le contrat de l'achat ("ACHAT-SPOT" = pas de contrat)
                                 _contrat_achat = ncc if ncc and ncc != "ACHAT-SPOT" else None
-                                
-                                # Filtrer les préfinancements : même contrat OU avance générale
+
                                 prefins_dispo = fetch_all("""
                                     SELECT pf.id, pf.reference, pf.numero_contrat,
                                            pf.montant_verse - COALESCE(SUM(ip.montant_impute), 0) AS solde
                                     FROM prefinancements_fournisseurs pf
-                                    LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
+                                    LEFT JOIN imputations_prefinancements ip 
+                                        ON ip.id_prefinancement = pf.id
                                     WHERE pf.id_fournisseur = %s
                                       AND pf.statut IN ('VERSE', 'PARTIELLEMENT_RECUPERE')
                                       AND (
-                                          -- Avance générale (utilisable partout)
                                           pf.numero_contrat IS NULL
-                                          -- OU préfinancement du même contrat que l'achat
                                           OR pf.numero_contrat = %s
                                       )
                                     GROUP BY pf.id
                                     HAVING pf.montant_verse - COALESCE(SUM(ip.montant_impute), 0) > 0.01
                                     ORDER BY 
                                         CASE 
-                                            WHEN pf.numero_contrat = %s THEN 0  -- Priorité matching contrat
-                                            WHEN pf.numero_contrat IS NULL THEN 1  -- Puis avances générales
+                                            WHEN pf.numero_contrat = %s THEN 0
+                                            WHEN pf.numero_contrat IS NULL THEN 1
                                             ELSE 2
                                         END,
                                         pf.date_creation ASC
                                 """, (id_f, _contrat_achat or "", _contrat_achat or ""))
-                            
-                                if prefins_dispo and _id_achat_courant:
+
+                                if prefins_dispo:
                                     st.session_state["pre_fin_proposition"] = {
-                                        "id_achat": _id_achat_courant,  # ← FIX : plus de None
+                                        "id_achat": id_achat_br,
                                         "total_achat": total_net,
                                         "fourn_nom": nom_f,
-                                        "contrat_achat": _contrat_achat,  # ← Nouveau : on garde le contrat
-                                        "prefins": prefins_dispo
+                                        "contrat_achat": _contrat_achat,
+                                        "prefins": prefins_dispo,
                                     }
-                            
+
                             st.rerun()
 
                         except Exception as e:
                             conn.rollback()
-                            st.error(f"❌ Erreur critique lors de la transaction : {e}")
+                            st.error(f"❌ Erreur critique : {e}")
+
         # ============================================================
-        # 🆕 DÉTECTION AUTOMATIQUE DE PRÉFINANCEMENT APRÈS FACTURATION
+        # DÉTECTION AUTOMATIQUE DE PRÉFINANCEMENT
         # ============================================================
         prop = st.session_state.get("pre_fin_proposition")
         if prop:
             with st.container(border=True):
                 st.markdown("### 💰 Préfinancement détecté pour ce fournisseur")
-                
+
                 if prop.get('contrat_achat'):
                     st.info(
-                        f"Le fournisseur **{prop['fourn_nom']}** dispose d'avance(s) utilisable(s) pour "
-                        f"cet achat rattaché au contrat **{prop['contrat_achat']}**. "
-                        f"Voulez-vous imputer ?"
+                        f"Le fournisseur **{prop['fourn_nom']}** dispose d'avance(s) "
+                        f"utilisable(s) pour cet achat rattaché au contrat "
+                        f"**{prop['contrat_achat']}**."
                     )
                 else:
                     st.info(
-                        f"Le fournisseur **{prop['fourn_nom']}** dispose d'avance(s) utilisable(s) pour "
-                        f"cet **achat spot** (sans contrat)."
+                        f"Le fournisseur **{prop['fourn_nom']}** dispose d'avance(s) "
+                        f"utilisable(s) pour cet **achat spot** (sans contrat)."
                     )
-        
+
                 c_achat, c_prefin = st.columns(2)
                 with c_achat:
-                    st.metric("Montant à imputer (achat)", f"{prop['total_achat']:,.0f} FCFA")
+                    st.metric("Montant à imputer", f"{prop['total_achat']:,.0f} FCFA")
                 with c_prefin:
                     st.metric("Préfinancements compatibles", f"{len(prop['prefins'])}")
-        
-                # Construire les options avec badge visuel
+
                 options_prefin = {}
                 for p in prop['prefins']:
                     id_pf_p, ref_pf, contrat_pf, solde_pf = p
@@ -4715,20 +4715,20 @@ elif choix == "🧾 Achats (Entrees)":
                         badge = "🌐 Avance générale"
                     else:
                         badge = f"📄 Contrat {contrat_pf}"
-                    
+
                     lbl = f"{ref_pf} — {float(solde_pf):,.0f} FCFA ({badge})"
                     options_prefin[lbl] = p
-                
+
                 choix_pf_lbl = st.selectbox(
-                    "Sélectionner le préfinancement à utiliser",
+                    "Sélectionner le préfinancement",
                     list(options_prefin.keys()),
                     key="pre_fin_choice"
                 )
                 pf = options_prefin[choix_pf_lbl]
                 id_pref = pf[0]
-                solde_pf = float(pf[3])  # ← décalé : solde est maintenant en position 3
+                solde_pf = float(pf[3])
                 contrat_pf = pf[2]
-                
+
                 mt_a_imputer = st.number_input(
                     "Montant à imputer *",
                     min_value=0.0,
@@ -4737,16 +4737,21 @@ elif choix == "🧾 Achats (Entrees)":
                     step=10000.0,
                     key="pre_fin_montant"
                 )
-        
+
                 col_ok, col_no = st.columns(2)
                 with col_ok:
-                    if st.button("✅ Confirmer l'imputation", type="primary", use_container_width=True, key="btn_imput_conf"):
+                    if st.button(
+                        "✅ Confirmer l'imputation", 
+                        type="primary", 
+                        use_container_width=True, 
+                        key="btn_imput_conf"
+                    ):
                         try:
                             ref_mvt = f"MVT-IMP-{id_pref}-{prop['id_achat']}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                             comment_auto = "Imputation auto après facturation"
                             if prop.get('contrat_achat'):
                                 comment_auto += f" (Contrat {prop['contrat_achat']})"
-                            
+
                             with conn.cursor() as cur:
                                 cur.execute("""
                                     INSERT INTO imputations_prefinancements
@@ -4755,18 +4760,22 @@ elif choix == "🧾 Achats (Entrees)":
                                 """, (id_pref, prop['id_achat'], mt_a_imputer))
                                 cur.execute("""
                                     INSERT INTO mouvements_prefinancements
-                                    (id_prefinancement, type_mouvement, montant, reference_operation,
-                                     id_achat, commentaire)
+                                    (id_prefinancement, type_mouvement, montant, 
+                                     reference_operation, id_achat, commentaire)
                                     VALUES (%s,'IMPUTATION',%s,%s,%s,%s)
-                                """, (id_pref, mt_a_imputer, ref_mvt, prop['id_achat'], comment_auto))
+                                """, (
+                                    id_pref, mt_a_imputer, ref_mvt, 
+                                    prop['id_achat'], comment_auto
+                                ))
                                 conn.commit()
-        
-                            # Mettre à jour le statut du préfinancement
+
+                            # Mise à jour du statut du préfinancement
                             with conn.cursor() as cur:
                                 cur.execute("""
                                     SELECT pf.montant_verse, COALESCE(SUM(ip.montant_impute), 0)
                                     FROM prefinancements_fournisseurs pf
-                                    LEFT JOIN imputations_prefinancements ip ON ip.id_prefinancement = pf.id
+                                    LEFT JOIN imputations_prefinancements ip 
+                                        ON ip.id_prefinancement = pf.id
                                     WHERE pf.id = %s
                                     GROUP BY pf.id, pf.montant_verse
                                 """, (id_pref,))
@@ -4781,24 +4790,35 @@ elif choix == "🧾 Achats (Entrees)":
                                     else:
                                         new_st = 'VERSE'
                                     cur.execute(
-                                        "UPDATE prefinancements_fournisseurs SET statut=%s WHERE id=%s",
+                                        "UPDATE prefinancements_fournisseurs "
+                                        "SET statut=%s WHERE id=%s",
                                         (new_st, id_pref)
                                     )
                                     conn.commit()
-        
-                            st.success(f"✅ {mt_a_imputer:,.0f} FCFA imputés sur le préfinancement.")
-                            log_action(f"Imputation auto {mt_a_imputer:,.0f} FCFA — achat #{prop['id_achat']} sur préfinancement #{id_pref}")
+
+                            st.success(
+                                f"✅ {mt_a_imputer:,.0f} FCFA imputés sur le préfinancement."
+                            )
+                            log_action(
+                                f"Imputation auto {mt_a_imputer:,.0f} FCFA — "
+                                f"achat #{prop['id_achat']} sur préfinancement #{id_pref}"
+                            )
                             st.session_state.pop("pre_fin_proposition", None)
                             st.balloons()
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
                             st.error(f"❌ Erreur d'imputation : {e}")
-        
+
                 with col_no:
-                    if st.button("⏭️ Ignorer pour cette fois", use_container_width=True, key="btn_imput_skip"):
+                    if st.button(
+                        "⏭️ Ignorer pour cette fois", 
+                        use_container_width=True, 
+                        key="btn_imput_skip"
+                    ):
                         st.session_state.pop("pre_fin_proposition", None)
                         st.rerun()
+
 
     # ==========================================
     # TAB 2 : HISTORIQUE GÉNÉRAL
@@ -10042,8 +10062,9 @@ elif choix == "🏪 Magasins":
         st.session_state.bl_pret = False
         st.session_state.data_bl = {}
         st.session_state.pdf_bytes_bl = None
+        
+   # Création des onglets
     
-    # Création des onglets
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📥 1. RÉCEPTION (BR)", 
         "📤 2. EXPÉDITION (BL)", 
@@ -10057,10 +10078,14 @@ elif choix == "🏪 Magasins":
     # =====================================================================
     with tab1:
         st.subheader("📥 Validation des Entrées")
-
+    
+        # Affichage du dernier BR généré
         if st.session_state.get("br_pret") and st.session_state.get("pdf_bytes_br"):
             with st.container(border=True):
-                st.success(f"🎉 Réception validée ! Le Bon de Réception N° **{st.session_state['data_br'].get('num_br')}** est prêt à être imprimé.")
+                st.success(
+                    f"🎉 Réception validée ! Le Bon de Réception N° "
+                    f"**{st.session_state['data_br'].get('num_br')}** est prêt à être imprimé."
+                )
                 st.download_button(
                     label="🖨️ IMPRIMER LE BON DE RÉCEPTION (BR)",
                     data=st.session_state["pdf_bytes_br"],
@@ -10070,28 +10095,76 @@ elif choix == "🏪 Magasins":
                     type="primary",
                     key="dl_br_top"
                 )
-
-        # Récupération des magasins
+    
+        # ============================================================
+        # CHARGEMENT DES DONNÉES NÉCESSAIRES
+        # ============================================================
+        # Magasins
         magasins_liste = fetch_all("SELECT nom FROM magasins")
         liste_noms_magasins = [m[0] for m in magasins_liste] if magasins_liste else []
-
+    
+        if not liste_noms_magasins:
+            st.error("❌ Aucun magasin enregistré. Créez-en un dans l'onglet ⚙️ PARAMÈTRES.")
+            st.stop()
+    
+        # Fournisseurs
+        fournisseurs_dispo = fetch_all("SELECT id, nom FROM fournisseurs ORDER BY nom")
+        dict_f = {f[1]: f[0] for f in fournisseurs_dispo} if fournisseurs_dispo else {}
+    
+        if not dict_f:
+            st.error("❌ Aucun fournisseur enregistré. Créez-en un dans 🤝 Fournisseurs.")
+            st.stop()
+    
         # Contrats actifs
         contrats_dispo = fetch_all("""
             SELECT c.id, c.numero_contrat, f.nom, f.id, c.prix_unitaire, c.provenance 
             FROM contrats c 
             JOIN fournisseurs f ON c.id_fournisseur = f.id
-            WHERE c.statut IN ('Actif', 'VALIDE') ORDER BY c.id DESC
+            WHERE c.statut IN ('Actif', 'VALIDE') 
+            ORDER BY c.id DESC
         """)
-        dict_c = {f"Contrat {c[1]} — {c[2]}": c for c in contrats_dispo} if contrats_dispo else {}
-
+        dict_c = {
+            f"Contrat {c[1]} — {c[2]}": c 
+            for c in contrats_dispo
+        } if contrats_dispo else {}
+    
+        # ============================================================
+        # ÉTAPE 1 : CHOISIR LE MODE (Contrat OU Spot)
+        # ============================================================
         with st.container(border=True):
-            if not dict_c:
-                st.warning("⚠️ Aucun contrat actif trouvé dans la base.")
-            else:
-                c_sel = st.selectbox("📌 Sélectionner le Contrat d'origine *", list(dict_c.keys()))
+            mode_reception = st.radio(
+                "📋 Type de réception",
+                ["📜 Réception liée à un contrat", "🛒 Réception sans contrat (Spot)"],
+                horizontal=True,
+                key="mode_reception_br"
+            )
+    
+            id_du_contrat = None
+            ncc = "ACHAT-SPOT"
+            nom_f = ""
+            id_f = None
+            pu_defaut = 0.0
+            prov_defaut = ""
+            num_lot_final = ""
+            choix_lot = "✨ Ouvrir un NOUVEAU lot"
+    
+            if mode_reception == "📜 Réception liée à un contrat":
+                if not dict_c:
+                    st.warning(
+                        "⚠️ Aucun contrat actif. "
+                        "Basculez en mode Spot ou créez un contrat dans 📝 Contrats."
+                    )
+                    st.stop()
+    
+                c_sel = st.selectbox("📌 Contrat d'origine *", list(dict_c.keys()))
                 infos_c = dict_c[c_sel]
-                id_du_contrat, ncc, nom_f, id_f, pu_defaut, prov_defaut = infos_c[0], infos_c[1], infos_c[2], infos_c[3], infos_c[4], infos_c[5]
-
+                (
+                    id_du_contrat, ncc, nom_f, id_f, pu_defaut, prov_defaut
+                ) = (
+                    infos_c[0], infos_c[1], infos_c[2], infos_c[3],
+                    infos_c[4], infos_c[5]
+                )
+    
                 st.write("---")
                 choix_lot = st.radio(
                     "Action sur la marchandise :",
@@ -10099,153 +10172,285 @@ elif choix == "🏪 Magasins":
                     horizontal=True,
                     key="choix_lot_pesee"
                 )
-
+    
                 lots_ouverts = fetch_all("""
                     SELECT numero_de_lot, quantite_kg, nombre_de_sacs 
-                    FROM achats WHERE numero_contrat = %s AND statut = 'En attente de facturation'
+                    FROM achats 
+                    WHERE numero_contrat = %s AND statut = 'En attente de facturation'
                 """, (ncc,))
-
-                num_lot_final = ""
-
+    
                 if choix_lot == "🔄 Compléter un lot existant":
                     if not lots_ouverts:
-                        st.info("💡 Aucun lot en cours pour ce contrat. Création d'un nouveau lot initiée.")
+                        st.info(
+                            "💡 Aucun lot en cours pour ce contrat. "
+                            "Création d'un nouveau lot initiée."
+                        )
                         choix_lot = "✨ Ouvrir un NOUVEAU lot"
                     else:
-                        dict_lots = {f"📦 Lot {l[0]} (Actuel : {l[1]} kg / {l[2]} sacs)": l[0] for l in lots_ouverts}
-                        num_lot_final = dict_lots[st.selectbox("Sélectionner le lot à compléter *", list(dict_lots.keys()))]
-
-                with st.form("form_reception_br"):
-                    st.markdown("#### ⚖️ Paramètres de Pesée & Logistique")
-                    c1, c2, c3, c4, c5, c6 = st.columns(6)
-                    p_brut = c1.number_input("Poids Brut Camion (kg)", min_value=0.0, step=10.0)
-                    p_net = c2.number_input("Poids Net Livré (kg) *", min_value=0.0, step=10.0)
-                    n_sacs = c3.number_input("Nombre de sacs *", min_value=0, step=1)
-                    poids_net_declarer = c4.number_input("Poids Net déclaré", min_value=0.0, step=10.0)
-                    ecart_de_poids = poids_net_declarer - p_net
-                    st.write(f"**Écart de poids :** {ecart_de_poids} kg")
-                    nature_produit = c5.text_input("Nature du Produit *")
-                    centre_de_achat = c6.text_input("Centre de l'achat")
-
-                    c7, c8, c9, c10 = st.columns(4)
-                    num_camion = c7.text_input("Immatriculation Camion *")
-                    chauffeur_nom = c8.text_input("Nom du Chauffeur *")
-                    provenance = c9.text_input("Zone de Provenance", value=prov_defaut if prov_defaut else "")
-                    mag_dest = st.selectbox("Magasin de déchargement *", liste_noms_magasins) if liste_noms_magasins else None
-
-                    submit_br = st.form_submit_button("📥 Valider la Réception & Générer le BR", use_container_width=True)
-
-                    if submit_br:
-                        if p_net <= 0 or n_sacs <= 0 or not mag_dest or not num_camion or not chauffeur_nom:
-                            st.error("❌ Veuillez remplir tous les champs obligatoires (*).")
-                        else:
-                            date_reception = datetime.now().strftime("%Y-%m-%d %H:%M")
-                            num_br_genere = f"BR-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-
-                            if choix_lot == "✨ Ouvrir un NOUVEAU lot":
-                                dernier_lot = fetch_one("""
-                                    SELECT numero_de_lot FROM achats 
-                                    WHERE numero_de_lot LIKE 'LOT-%' 
-                                    ORDER BY id DESC LIMIT 1
-                                """)
-                                if dernier_lot and dernier_lot[0]:
-                                    try:
-                                        parts = dernier_lot[0].split('-')
-                                        if len(parts) == 3:
-                                            suffix = int(parts[2]) + 1
-                                            num_lot_final = f"LOT-{datetime.now().strftime('%Y%m%d')}-{suffix:04d}"
-                                        else:
-                                            num_lot_final = f"LOT-{datetime.now().strftime('%Y%m%d')}-0001"
-                                    except:
-                                        num_lot_final = f"LOT-{datetime.now().strftime('%Y%m%d')}-0001"
+                        dict_lots = {
+                            f"📦 Lot {l[0]} (Actuel : {l[1]} kg / {l[2]} sacs)": l[0]
+                            for l in lots_ouverts
+                        }
+                        num_lot_final = dict_lots[
+                            st.selectbox(
+                                "Sélectionner le lot à compléter *",
+                                list(dict_lots.keys())
+                            )
+                        ]
+    
+            else:  # Réception Spot
+                st.info(
+                    "💡 Réception **sans contrat préalable** (achat spot). "
+                    "Le prix unitaire sera saisi plus tard lors de la facturation."
+                )
+    
+                f_selectionne = st.selectbox(
+                    "🏢 Fournisseur *",
+                    list(dict_f.keys()),
+                    key="spot_fournisseur_br"
+                )
+                nom_f = f_selectionne
+                id_f = dict_f[f_selectionne]
+                ncc = "ACHAT-SPOT"
+                id_du_contrat = None
+                pu_defaut = 0.0
+    
+                # Numéro de lot auto pour spot
+                try:
+                    dernier_lot_spot = fetch_one("""
+                        SELECT numero_de_lot FROM achats 
+                        WHERE numero_de_lot LIKE 'LOT-SPOT-%%' 
+                        ORDER BY id DESC LIMIT 1
+                    """)
+                    if dernier_lot_spot and dernier_lot_spot[0]:
+                        parts = dernier_lot_spot[0].split('-')
+                        suffix = int(parts[-1]) + 1
+                        num_lot_final = (
+                            f"LOT-SPOT-{datetime.now().strftime('%Y%m%d')}-{suffix:04d}"
+                        )
+                    else:
+                        num_lot_final = (
+                            f"LOT-SPOT-{datetime.now().strftime('%Y%m%d')}-0001"
+                        )
+                except Exception:
+                    num_lot_final = (
+                        f"LOT-SPOT-{datetime.now().strftime('%Y%m%d')}-{id_f:04d}"
+                    )
+    
+                st.caption(f"📦 N° de lot qui sera créé : **{num_lot_final}**")
+    
+        # ============================================================
+        # ÉTAPE 2 : FORMULAIRE DE PESÉE
+        # ============================================================
+        with st.form("form_reception_br"):
+            st.markdown("#### ⚖️ Paramètres de Pesée & Logistique")
+    
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            p_brut = c1.number_input("Poids Brut Camion (kg)", min_value=0.0, step=10.0)
+            p_net = c2.number_input("Poids Net Livré (kg) *", min_value=0.0, step=10.0)
+            n_sacs = c3.number_input("Nombre de sacs *", min_value=0, step=1)
+            poids_net_declarer = c4.number_input(
+                "Poids Net déclaré", min_value=0.0, step=10.0
+            )
+            ecart_de_poids = poids_net_declarer - p_net
+            st.write(f"**Écart de poids :** {ecart_de_poids} kg")
+            nature_produit = c5.text_input("Nature du Produit *", value="Cacao")
+            centre_de_achat = c6.text_input("Centre de l'achat")
+    
+            c7, c8, c9 = st.columns(3)
+            num_camion = c7.text_input("Immatriculation Camion *")
+            chauffeur_nom = c8.text_input("Nom du Chauffeur *")
+            provenance = c9.text_input(
+                "Zone de Provenance",
+                value=prov_defaut if prov_defaut else ""
+            )
+    
+            mag_dest = st.selectbox(
+                "🏪 Magasin de déchargement *",
+                liste_noms_magasins
+            )
+    
+            submit_br = st.form_submit_button(
+                "📥 Valider la Réception & Générer le BR",
+                use_container_width=True,
+                type="primary"
+            )
+    
+            if submit_br:
+                # Validations
+                if p_net <= 0 or n_sacs <= 0 or not mag_dest or not num_camion or not chauffeur_nom:
+                    st.error("❌ Veuillez remplir tous les champs obligatoires (*).")
+                elif mode_reception == "🛒 Réception sans contrat (Spot)" and id_f is None:
+                    st.error("❌ Sélectionnez un fournisseur pour la réception spot.")
+                else:
+                    date_reception = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    num_br_genere = f"BR-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    
+                    # Déterminer le lot final
+                    if mode_reception == "📜 Réception liée à un contrat":
+                        if choix_lot == "✨ Ouvrir un NOUVEAU lot":
+                            dernier_lot = fetch_one("""
+                                SELECT numero_de_lot FROM achats 
+                                WHERE numero_de_lot LIKE 'LOT-%%' 
+                                AND numero_de_lot NOT LIKE 'LOT-SPOT-%%'
+                                ORDER BY id DESC LIMIT 1
+                            """)
+                            if dernier_lot and dernier_lot[0]:
+                                try:
+                                    parts = dernier_lot[0].split('-')
+                                    if len(parts) == 3:
+                                        suffix = int(parts[2]) + 1
+                                        num_lot_final = (
+                                            f"LOT-{datetime.now().strftime('%Y%m%d')}-"
+                                            f"{suffix:04d}"
+                                        )
+                                    else:
+                                        num_lot_final = (
+                                            f"LOT-{datetime.now().strftime('%Y%m%d')}-0001"
+                                        )
+                                except Exception:
+                                    num_lot_final = (
+                                        f"LOT-{datetime.now().strftime('%Y%m%d')}-0001"
+                                    )
+                            else:
+                                num_lot_final = (
+                                    f"LOT-{datetime.now().strftime('%Y%m%d')}-0001"
+                                )
+                        # Sinon num_lot_final est déjà rempli (compléter lot existant)
+    
+                    try:
+                        with conn.cursor() as cur:
+                            # =============================================
+                            # CAS 1 : NOUVEAU LOT (Contrat ou Spot)
+                            # =============================================
+                            if choix_lot == "✨ Ouvrir un NOUVEAU lot" or mode_reception == "🛒 Réception sans contrat (Spot)":
+                                cur.execute("""
+                                    INSERT INTO achats 
+                                    (date, numero_de_lot, id_fournisseur, numero_contrat, 
+                                     poids_brut, poids_net, nombre_de_sacs, quantite_kg, 
+                                     statut, numero_br)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 
+                                            'En attente de facturation', %s)
+                                    RETURNING id
+                                """, (
+                                    date_reception, num_lot_final, id_f, ncc,
+                                    p_brut, p_net, n_sacs, p_net, num_br_genere
+                                ))
+                                id_achat = cur.fetchone()[0]
+    
+                            # =============================================
+                            # CAS 2 : COMPLÉTER UN LOT EXISTANT
+                            # =============================================
+                            else:
+                                row = fetch_one("""
+                                    SELECT id FROM achats 
+                                    WHERE numero_de_lot = %s 
+                                    AND statut = 'En attente de facturation'
+                                """, (num_lot_final,))
+                                if row:
+                                    id_achat = row[0]
                                 else:
-                                    num_lot_final = f"LOT-{datetime.now().strftime('%Y%m%d')}-0001"
-
-                            with conn.cursor() as cur:
-                                if choix_lot == "✨ Ouvrir un NOUVEAU lot":
+                                    # Sécurité : création si pas trouvé
                                     cur.execute("""
                                         INSERT INTO achats 
                                         (date, numero_de_lot, id_fournisseur, numero_contrat, 
-                                        poids_brut, poids_net, nombre_de_sacs, quantite_kg, statut, numero_br)
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'En attente de facturation', %s)
+                                         poids_brut, poids_net, nombre_de_sacs, quantite_kg, 
+                                         statut, numero_br)
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 
+                                                'En attente de facturation', %s)
                                         RETURNING id
-                                    """, (date_reception, num_lot_final, id_f, ncc, 
-                                        p_brut, p_net, n_sacs, p_net, num_br_genere))
+                                    """, (
+                                        date_reception, num_lot_final, id_f, ncc,
+                                        p_brut, p_net, n_sacs, p_net, num_br_genere
+                                    ))
                                     id_achat = cur.fetchone()[0]
-                                else:
-                                    row = fetch_one("SELECT id FROM achats WHERE numero_de_lot = %s AND statut = 'En attente de facturation'", (num_lot_final,))
-                                    if row:
-                                        id_achat = row[0]
-                                    else:
-                                        cur.execute("""
-                                            INSERT INTO achats 
-                                            (date, numero_de_lot, id_fournisseur, numero_contrat, 
-                                            poids_brut, poids_net, nombre_de_sacs, quantite_kg, statut, numero_br)
-                                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'En attente de facturation', %s)
-                                            RETURNING id
-                                        """, (date_reception, num_lot_final, id_f, ncc, 
-                                            p_brut, p_net, n_sacs, p_net, num_br_genere))
-                                        id_achat = cur.fetchone()[0]
-
-                                    
-                                    # 🔧 FIX : Conversion sécurisée des chaînes en nombres décimaux
-                                    try:
-                                        p_brut_num = float(p_brut) if p_brut and str(p_brut).strip() else 0.0
-                                    except (ValueError, TypeError):
-                                        p_brut_num = 0.0
-
-                                    p_brut_num = float(p_brut or 0)
-                                    p_net_num  = float(p_net or 0)
-                                    n_sacs_num = int(n_sacs or 0)
-                                    
-                                    cur.execute("""
-                                        UPDATE achats
-                                        SET poids_brut = (COALESCE(NULLIF(TRIM(poids_brut::text), ''), '0')::numeric + %s)::text,
-                                            poids_net  = (COALESCE(NULLIF(TRIM(poids_net::text),  ''), '0')::numeric + %s)::text,
-                                            quantite_kg = COALESCE(quantite_kg::numeric, 0) + %s,
-                                            nombre_de_sacs = COALESCE(nombre_de_sacs::numeric, 0)::integer + %s
-                                        WHERE numero_de_lot = %s
-                                          AND statut = 'En attente de facturation'
-                                    """, (p_brut_num, p_net_num, p_net_num, n_sacs_num, num_lot_final))
-
-                                commentaire = f"Réception du lot {num_lot_final} - Contrat {ncc}" 
-
+    
+                                # Incrément des poids cumulés
+                                p_brut_num = float(p_brut or 0)
+                                p_net_num = float(p_net or 0)
+                                n_sacs_num = int(n_sacs or 0)
+    
                                 cur.execute("""
-                                    INSERT INTO stock (date, type, quantite_kg, origine, fournisseur, id_contrat, magasin_destination, commentaire, id_achat, numero_camion, provenance)
-                                    VALUES (%s, 'Entrée', %s, 'Achat', %s, %s, %s, %s, %s, %s, %s)
-                                """, (date_reception, p_net, nom_f, id_du_contrat, mag_dest, commentaire, id_achat, num_camion, provenance))
-
-                                conn.commit()
-
-                            data_br = {
-                                "num_br": num_br_genere,
-                                "date": date_reception,
-                                "magasin": mag_dest,
-                                "numero_lot": num_lot_final,
-                                "fournisseur": nom_f,
-                                "provenance": provenance,
-                                "poids_brut": p_brut,
-                                "poids_net": p_net,
-                                "poids_net_declarer": poids_net_declarer,
-                                "ecart_de_poids": ecart_de_poids,
-                                "sacs": n_sacs,
-                                "camion": num_camion,
-                                "chauffeur": chauffeur_nom,
-                                "numero_contrat": ncc,
-                                "nature_produit": nature_produit,
-                                "centre_achat": centre_de_achat,
-                            }
-
-                            pdf_path_br = generer_bon_reception_pdf(data_br)
-                            with open(pdf_path_br, "rb") as f:
-                                pdf_bytes = f.read()
-
-                            st.session_state["data_br"] = data_br
-                            st.session_state["pdf_bytes_br"] = pdf_bytes
-                            st.session_state["br_pret"] = True
-                            st.toast("✅ Réception enregistrée avec succès !", icon="🎉")
-                            st.rerun()
-
+                                    UPDATE achats
+                                    SET poids_brut = (
+                                            COALESCE(NULLIF(TRIM(poids_brut::text), ''), '0')::numeric + %s
+                                        )::text,
+                                        poids_net = (
+                                            COALESCE(NULLIF(TRIM(poids_net::text), ''), '0')::numeric + %s
+                                        )::text,
+                                        quantite_kg = COALESCE(quantite_kg::numeric, 0) + %s,
+                                        nombre_de_sacs = COALESCE(nombre_de_sacs::numeric, 0)::integer + %s
+                                    WHERE numero_de_lot = %s
+                                      AND statut = 'En attente de facturation'
+                                """, (
+                                    p_brut_num, p_net_num, p_net_num, n_sacs_num,
+                                    num_lot_final
+                                ))
+    
+                            # =============================================
+                            # INSERTION DANS STOCK
+                            # =============================================
+                            commentaire = f"Réception du lot {num_lot_final} - {ncc}"
+                            cur.execute("""
+                                INSERT INTO stock (
+                                    date, type, quantite_kg, origine, 
+                                    fournisseur, id_contrat, magasin_destination, 
+                                    commentaire, id_achat, numero_camion, provenance
+                                )
+                                VALUES (%s, 'Entrée', %s, 'Achat', %s, %s, %s, %s, %s, %s, %s)
+                            """, (
+                                date_reception, p_net, nom_f, id_du_contrat,
+                                mag_dest, commentaire, id_achat, num_camion, provenance
+                            ))
+    
+                            conn.commit()
+    
+                        # =============================================
+                        # GÉNÉRATION DU PDF BR
+                        # =============================================
+                        data_br = {
+                            "num_br": num_br_genere,
+                            "date": date_reception,
+                            "magasin": mag_dest,
+                            "numero_lot": num_lot_final,
+                            "fournisseur": nom_f,
+                            "provenance": provenance,
+                            "poids_brut": p_brut,
+                            "poids_net": p_net,
+                            "poids_net_declarer": poids_net_declarer,
+                            "ecart_de_poids": ecart_de_poids,
+                            "sacs": n_sacs,
+                            "camion": num_camion,
+                            "chauffeur": chauffeur_nom,
+                            "numero_contrat": ncc,
+                            "nature_produit": nature_produit,
+                            "centre_achat": centre_de_achat,
+                        }
+    
+                        pdf_path_br = generer_bon_reception_pdf(data_br)
+                        with open(pdf_path_br, "rb") as f:
+                            pdf_bytes = f.read()
+                        os.remove(pdf_path_br)
+    
+                        st.session_state["data_br"] = data_br
+                        st.session_state["pdf_bytes_br"] = pdf_bytes
+                        st.session_state["br_pret"] = True
+    
+                        log_action(
+                            f"Réception BR {num_br_genere} — Lot {num_lot_final} — "
+                            f"{p_net} kg ({nom_f}) — {mag_dest}"
+                        )
+    
+                        st.toast(
+                            f"✅ BR {num_br_genere} créé ! Statut : En attente de facturation.",
+                            icon="🎉"
+                        )
+                        st.rerun()
+    
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"❌ Erreur : {e}") 
+   
     # =====================================================================
     # ---- ONGLET 2 : EXPÉDITION (SORTIE)
     # =====================================================================
