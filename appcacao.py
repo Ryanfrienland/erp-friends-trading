@@ -10526,53 +10526,49 @@ elif choix == "🏪 Magasins":
                     
                     submit_bl = st.form_submit_button("🖨️ Valider la Sortie (Déstocker) & Générer le BL", use_container_width=True)
                     
+                    
                     if submit_bl:
                         if not destination or not camion_bl or not chauffeur_bl:
                             st.error("❌ Veuillez remplir tous les champs obligatoires (*).")
                         else:
-                        # ... (début du code de validation)
-                        if submit_bl:
-                            if not destination or not camion_bl or not chauffeur_bl:
-                                st.error("❌ Veuillez remplir tous les champs obligatoires (*).")
+                            # Vérification du stock disponible
+                            row = fetch_one("""
+                                SELECT 
+                                    (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type = 'Entrée') -
+                                    (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type = 'Sortie')
+                            """, (magasin_depart, magasin_depart))
+                            stock_dispo = float(row[0]) if row and row[0] is not None else 0.0
+    
+                            if poids_a_sortir > stock_dispo:
+                                st.error(f"❌ Impossible d'expédier ! Stock insuffisant dans {magasin_depart} (Disponible : {stock_dispo:,.0f} kg).")
                             else:
-                                # Vérification du stock disponible
-                                row = fetch_one("""
-                                    SELECT 
-                                        (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type = 'Entrée') -
-                                        (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type = 'Sortie')
-                                """, (magasin_depart, magasin_depart))
-                                stock_dispo = float(row[0]) if row and row[0] is not None else 0.0
-        
-                                if poids_a_sortir > stock_dispo:
-                                    st.error(f"❌ Impossible d'expédier ! Stock insuffisant dans {magasin_depart} (Disponible : {stock_dispo:,.0f} kg).")
-                                else:
-                                    date_sortie = datetime.now().strftime("%Y-%m-%d %H:%M")
-                                    num_bl_genere = f"BL-{datetime.now().strftime('%Y%m%d')}-{id_vente_sel:04d}"
+                                date_sortie = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                num_bl_genere = f"BL-{datetime.now().strftime('%Y%m%d')}-{id_vente_sel:04d}"
+                                
+                                with conn.cursor() as cur:
+                                    # 1. On crée la sortie de stock physique
+                                    cur.execute("""
+                                        INSERT INTO stock (date, type, quantite_kg, origine, magasin_destination, commentaire) 
+                                        VALUES (%s, 'Sortie', %s, 'Expédition', %s, %s)
+                                    """, (date_sortie, poids_a_sortir, magasin_depart, f"Livraison Vente N°{id_vente_sel} (Camion: {camion_bl})"))
                                     
-                                    with conn.cursor() as cur:
-                                        # 1. On crée la sortie de stock physique
-                                        cur.execute("""
-                                            INSERT INTO stock (date, type, quantite_kg, origine, magasin_destination, commentaire) 
-                                            VALUES (%s, 'Sortie', %s, 'Expédition', %s, %s)
-                                        """, (date_sortie, poids_a_sortir, magasin_depart, f"Livraison Vente N°{id_vente_sel} (Camion: {camion_bl})"))
-                                        
-                                        # 2. On crée le BL
-                                        cur.execute("""
-                                            INSERT INTO bons_livraison (id_vente, date_creation, quantite_a_livrer, statut)
-                                            VALUES (%s, %s, %s, %s)
-                                        """, (id_vente_sel, date_sortie, poids_a_sortir, 'Validé'))
-                                        
-                                        # 3. On met à jour le statut de la vente
-                                        cur.execute("UPDATE ventes SET statut_livraison = 'Livré' WHERE id = %s", (id_vente_sel,))
-                                        conn.commit()
-                                        
-                                        # 4. On synchronise le stock par magasin (votre fonction existante)
-                                        lot_vente = fetch_one(
-                                            "SELECT numero_lot_source FROM ventes WHERE id = %s",
-                                            (id_vente_sel,)
-                                        )
-                                        if lot_vente and lot_vente[0]:
-                                            sync_stock_apres_vente(lot_vente[0], poids_a_sortir)
+                                    # 2. On crée le BL
+                                    cur.execute("""
+                                        INSERT INTO bons_livraison (id_vente, date_creation, quantite_a_livrer, statut)
+                                        VALUES (%s, %s, %s, %s)
+                                    """, (id_vente_sel, date_sortie, poids_a_sortir, 'Validé'))
+                                    
+                                    # 3. On met à jour le statut de la vente
+                                    cur.execute("UPDATE ventes SET statut_livraison = 'Livré' WHERE id = %s", (id_vente_sel,))
+                                    conn.commit()
+                                    
+                                    # 4. On synchronise le stock par magasin (votre fonction existante)
+                                    lot_vente = fetch_one(
+                                        "SELECT numero_lot_source FROM ventes WHERE id = %s",
+                                        (id_vente_sel,)
+                                    )
+                                    if lot_vente and lot_vente[0]:
+                                        sync_stock_apres_vente(lot_vente[0], poids_a_sortir)
                                         
 
                                 data_bl = {
