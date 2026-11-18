@@ -6074,12 +6074,9 @@ elif choix == "🛍️ Ventes (Sorties)":
         st.divider()
 
         # Vérification du stock disponible
-        stock_check = fetch_one("""
-            SELECT
-                (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type='Entrée') -
-                (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type='Sortie')
-        """, (d.get("magasin_source"), d.get("magasin_source")))
-        stock_dispo = float(stock_check[0]) if stock_check and stock_check[0] else 0.0
+        df_st = get_dataframe_from_query(SQL_STOCK_MAGASINS)
+        ligne_mag = df_st[df_st["nom"] == d.get("magasin_source")]
+        stock_dispo = float(ligne_mag["stock_actuel"].iloc[0]) if not ligne_mag.empty else 0.0
 
         if d.get("poids_net", 0) > stock_dispo:
             st.error(f"⚠️ Stock insuffisant dans **{d.get('magasin_source')}** : "
@@ -10532,12 +10529,9 @@ elif choix == "🏪 Magasins":
                             st.error("❌ Veuillez remplir tous les champs obligatoires (*).")
                         else:
                             # Vérification du stock disponible
-                            row = fetch_one("""
-                                SELECT 
-                                    (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type = 'Entrée') -
-                                    (SELECT COALESCE(SUM(quantite_kg), 0) FROM stock WHERE magasin_destination = %s AND type = 'Sortie')
-                            """, (magasin_depart, magasin_depart))
-                            stock_dispo = float(row[0]) if row and row[0] is not None else 0.0
+                            df_st = get_dataframe_from_query(SQL_STOCK_MAGASINS)
+                            ligne_mag = df_st[df_st["nom"] == magasin_depart]
+                            stock_dispo = float(ligne_mag["stock_actuel"].iloc[0]) if not ligne_mag.empty else 0.0
     
                             if poids_a_sortir > stock_dispo:
                                 st.error(f"❌ Impossible d'expédier ! Stock insuffisant dans {magasin_depart} (Disponible : {stock_dispo:,.0f} kg).")
