@@ -3362,63 +3362,61 @@ def determiner_statut_qualite(
 # ==========================================
 # ----- Fonctions pour interagir avec PostgreSQL sans SQLAlchemy -----
 def get_single_value(query, default=0):
-    """Exécute une requête et retourne la première colonne de la première ligne."""
-    with conn.cursor() as cur:
-        cur.execute(query)
-        row = cur.fetchone()
-        return row[0] if row and row[0] is not None else default
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            row = cur.fetchone()
+            return row[0] if row and row[0] is not None else default
+    except Exception:
+        conn.rollback()
+        raise
 
 def fetch_all(query, params=None):
-    """Exécute une requête SELECT et retourne toutes les lignes."""
     try:
         with conn.cursor() as cur:
-
             if params is None:
                 cur.execute(query)
             else:
                 if not isinstance(params, (tuple, list)):
                     params = (params,)
-
                 cur.execute(query, tuple(params))
-
             return cur.fetchall()
-
     except Exception as e:
+        conn.rollback()          # <-- indispensable
         logging.error(f"Erreur fetch_all : {e}")
         raise
+
 def fetch_one(query, params=None, default=None):
-    """Exécute une requête SELECT et retourne une seule ligne."""
     try:
         with conn.cursor() as cur:
-
-            # Aucun paramètre : surtout ne pas envoyer ()
-            # afin que les % SQL de LIKE ne soient pas interprétés
-            # comme des placeholders Python.
             if params is None:
                 cur.execute(query)
             else:
                 if not isinstance(params, (tuple, list)):
                     params = (params,)
-
                 cur.execute(query, tuple(params))
-
             row = cur.fetchone()
             return row if row is not None else default
-
     except Exception as e:
+        conn.rollback()          # <-- indispensable
         logging.error(f"Erreur fetch_one : {e}")
         raise
 
 def get_dataframe_from_query(query, params=None):
     import pandas as pd
-    with conn.cursor() as cur:
-        cur.execute(query, params or ())
-        rows = cur.fetchall()
-        if not rows:
-            return pd.DataFrame()
-        colnames = [desc[0] for desc in cur.description]
-        return pd.DataFrame(rows, columns=colnames)
-
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            rows = cur.fetchall()
+            if not rows:
+                return pd.DataFrame()
+            colnames = [desc[0] for desc in cur.description]
+            return pd.DataFrame(rows, columns=colnames)
+    except Exception as e:
+        conn.rollback()          # <-- indispensable
+        logging.error(f"Erreur get_dataframe_from_query : {e}")
+        raise
+        
 @st.cache_data(ttl=60)
 def get_stock_actuel():
     """Retourne le stock actuel (entrée - sortie) en kg."""
@@ -8258,10 +8256,11 @@ elif choix == "📦 Mouvements de Stock":
     try:
         bilan = fetch_one("""
             SELECT 
-                COALESCE(SUM(quantite_kg), 0) as brut,
-                COALESCE(SUM(poids_net), 0) as net,
-                COALESCE(SUM(deductions), 0) as refactions
+                COALESCE(SUM(NULLIF(TRIM(quantite_kg::text), '')::numeric), 0) AS brut,
+                COALESCE(SUM(NULLIF(TRIM(poids_net::text), '')::numeric), 0)   AS net,
+                COALESCE(SUM(COALESCE(deductions, 0)), 0)                      AS refactions
             FROM achats
+            WHERE statut != 'En attente de facturation'
         """)
         
         if bilan:
@@ -8324,7 +8323,7 @@ elif choix == "📦 Mouvements de Stock":
         spm.date_derniere_maj
     FROM stock_par_magasin spm
     WHERE spm.poids_net_payable > 0
-    ORDER BY spm.magasin, spm.stock_disponible DESC
+    ORDER BY spm.magasin, stock_disponible DESC
 """)
 
     if df_stock.empty:
