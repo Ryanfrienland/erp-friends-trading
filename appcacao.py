@@ -8121,9 +8121,9 @@ elif choix == "🏗️ Prestataires & Transitaires":
                                 st.error(f"❌ Erreur de génération : {e}")
     
 elif choix == "📦 Mouvements de Stock":
-    
+
     # =========================================================
-    # EN-TÊTE PREMIUM
+    # EN-TÊTE
     # =========================================================
     st.markdown("""
         <style>
@@ -8147,37 +8147,7 @@ elif choix == "📦 Mouvements de Stock":
                 margin: 0.4rem 0 0 0;
                 font-size: 1rem;
             }
-            .kpi-tile {
-                background: #FFFFFF;
-                border: 1px solid #E2E8F0;
-                border-radius: 14px;
-                padding: 1rem 1.2rem;
-                box-shadow: 0 2px 8px rgba(15,23,42,0.04);
-                transition: all 0.15s ease;
-                height: 100%;
-            }
-            .kpi-tile:hover {
-                box-shadow: 0 8px 20px rgba(15,23,42,0.08);
-                transform: translateY(-2px);
-            }
-            .kpi-label {
-                font-size: 11px;
-                color: #94A3B8;
-                font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 1.5px;
-                margin-bottom: 6px;
-            }
-            .kpi-value {
-                font-size: 1.6rem;
-                font-weight: 800;
-                color: #0F172A;
-                line-height: 1.1;
-            }
         </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
         <div class="stock-header">
             <h1>📦 Mouvements de Stock</h1>
             <p>Suivi du stock réel par magasin et par lot · Entrées, sorties et ajustements</p>
@@ -8200,145 +8170,197 @@ elif choix == "📦 Mouvements de Stock":
             return 0.0
 
     # =========================================================
-    # SECTION 1 : KPI SIMPLES (Les 3 chiffres qui comptent)
+    # SECTION 1 : KPI — source unique de vérité : SQL_STOCK_MAGASINS
     # =========================================================
     try:
-        kpi = fetch_one("""
-            SELECT 
-                -- Stock physique actuel
-                COALESCE(SUM(
-                    GREATEST(0,
-                        spm.poids_net_payable
-                        + spm.quantite_transferee_in
-                        - spm.quantite_transferee_out
-                        - COALESCE((
-                            SELECT SUM(v.quantite_kg)
-                            FROM ventes v
-                            WHERE v.numero_lot_source = spm.numero_lot
-                              AND v.statut_livraison = 'Livré'
-                        ), 0)
-                    )
-                ), 0) as stock_actuel,
-                -- Total entrées historiques
-                COALESCE(SUM(spm.poids_net_payable), 0) as total_entrees,
-                -- Total sorties historiques (livraisons)
-                COALESCE((
-                    SELECT SUM(v.quantite_kg) 
-                    FROM ventes v 
-                    WHERE v.statut_livraison = 'Livré'
-                ), 0) as total_sorties
-            FROM stock_par_magasin spm
-            WHERE spm.poids_net_payable > 0
-        """)
-        
-        stock_actuel = _safe_float(kpi[0]) if kpi else 0
-        total_entrees = _safe_float(kpi[1]) if kpi else 0
-        total_sorties = _safe_float(kpi[2]) if kpi else 0
+        df_k = get_dataframe_from_query(SQL_STOCK_MAGASINS)
+        if not df_k.empty:
+            stock_actuel = float(
+                pd.to_numeric(df_k["stock_actuel"], errors="coerce").fillna(0).sum()
+            )
+        else:
+            stock_actuel = 0.0
+
+        total_entrees = _safe_float(get_single_value(
+            "SELECT COALESCE(SUM(poids_net_payable), 0) FROM stock_par_magasin"
+        ))
+        total_sorties = _safe_float(get_single_value(
+            "SELECT COALESCE(SUM(quantite_kg), 0) FROM ventes "
+            "WHERE statut_livraison = 'Livré'"
+        ))
+        total_ajust = _safe_float(get_single_value(
+            "SELECT COALESCE(SUM(quantite_kg), 0) FROM ajustements_stock_magasin"
+        ))
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("📦 Stock Physique Actuel", f"{_fmt_kg(stock_actuel)} kg", 
-                  help="Somme des stocks disponibles dans tous les magasins")
-        c2.metric("📥 Total Entrées (historique)", f"{_fmt_kg(total_entrees)} kg",
-                  help="Cumul des poids nets payables de tous les achats")
-        c3.metric("🚛 Total Sorties (historique)", f"{_fmt_kg(total_sorties)} kg",
-                  help="Cumul des ventes livrées")
+        c1.metric(
+            "📦 Stock Physique Actuel", f"{_fmt_kg(stock_actuel)} kg",
+            help="Somme des stocks de tous les magasins (entrées + transferts − livraisons + ajustements)"
+        )
+        c2.metric(
+            "📥 Total Entrées (historique)", f"{_fmt_kg(total_entrees)} kg",
+            help="Cumul des poids nets payables"
+        )
+        c3.metric(
+            "🚛 Total Sorties (historique)", f"{_fmt_kg(total_sorties)} kg",
+            help="Cumul des ventes livrées"
+        )
 
+        # Contrôle de cohérence
+        ecart_global = (total_entrees - total_sorties + total_ajust) - stock_actuel
+        if abs(ecart_global) > 1:
+            st.warning(
+                f"⚠️ Incohérence de {_fmt_kg(ecart_global)} kg entre "
+                f"(entrées − sorties + ajustements) et le stock calculé. "
+                f"Vérifiez les transferts entre magasins."
+            )
     except Exception as e:
         st.error(f"❌ Erreur calcul KPI : {e}")
 
     st.divider()
 
     # =========================================================
-    # SECTION 2 : BILAN QUALITATIF (Tableau compact)
+    # SECTION 2 : BILAN QUALITATIF
     # =========================================================
     st.markdown("### ⚖️ Bilan Qualitatif Global")
-    
+
     try:
         bilan = fetch_one("""
-            SELECT 
-                COALESCE(SUM(NULLIF(TRIM(quantite_kg::text), '')::numeric), 0) AS brut,
-                COALESCE(SUM(NULLIF(TRIM(poids_net::text), '')::numeric), 0)   AS net,
-                COALESCE(SUM(COALESCE(deductions, 0)), 0)                      AS refactions
+            SELECT
+                COALESCE(SUM(NULLIF(TRIM(poids_net::text), '')::numeric), 0) AS net_recu,
+                COALESCE(SUM(poids_net_paye), 0)                             AS net_payable
             FROM achats
-            WHERE statut != 'En attente de facturation'
+            WHERE poids_net_paye IS NOT NULL
         """)
-        
+
         if bilan:
-            brut, net, refactions = bilan
-            brut = _safe_float(brut)
-            net = _safe_float(net)
-            refactions = _safe_float(refactions)
-            
-            taux_refact = (refactions / brut * 100) if brut > 0 else 0
-            
+            net_recu = _safe_float(bilan[0])
+            net_payable = _safe_float(bilan[1])
+            refactions = max(0.0, net_recu - net_payable)
+            taux_refact = (refactions / net_recu * 100) if net_recu > 0 else 0.0
+
             st.markdown(f"""
-            | Indicateur | Valeur |
-            | :--- | :--- |
-            | **Poids Brut Reçu (historique)** | {_fmt_kg(brut)} kg |
-            | **Poids Net Payable (historique)** | {_fmt_kg(net)} kg |
-            | **Total Réfactions** | -{_fmt_kg(refactions)} kg |
-            | **Taux de réfaction global** | {taux_refact:.2f} % |
-            """)
-            
+| Indicateur | Valeur |
+| :--- | :--- |
+| **Poids Net Reçu (historique)** | {_fmt_kg(net_recu)} kg |
+| **Poids Net Payable (historique)** | {_fmt_kg(net_payable)} kg |
+| **Total Réfactions** | -{_fmt_kg(refactions)} kg |
+| **Taux de réfaction global** | {taux_refact:.2f} % |
+""")
+
             if taux_refact > 5:
-                st.warning(f"⚠️ Le taux de réfaction global est élevé ({taux_refact:.2f}%). Vérifiez la qualité des lots.")
+                st.warning(
+                    f"⚠️ Le taux de réfaction global est élevé ({taux_refact:.2f}%). "
+                    f"Vérifiez la qualité des lots."
+                )
     except Exception as e:
         st.error(f"❌ Erreur bilan qualitatif : {e}")
 
     st.divider()
 
     # =========================================================
-    # SECTION 3 : STOCK DÉTAILLÉ PAR MAGASIN × LOT
+    # SECTION 3 : STOCK PAR MAGASIN (fiable)
     # =========================================================
-    st.markdown("### 🏢 Stock détaillé par magasin et par lot")
+    st.markdown("### 🏢 Stock par magasin")
+
+    try:
+        df_mag = get_dataframe_from_query(SQL_STOCK_MAGASINS)
+        if df_mag.empty:
+            st.info("ℹ️ Aucun magasin enregistré.")
+        else:
+            df_mag["stock_actuel"] = pd.to_numeric(
+                df_mag["stock_actuel"], errors="coerce"
+            ).fillna(0.0)
+            df_mag["capacite_kg"] = pd.to_numeric(
+                df_mag["capacite_kg"], errors="coerce"
+            ).fillna(0.0)
+
+            st.dataframe(
+                df_mag[["nom", "emplacement", "capacite_kg", "stock_actuel"]].rename(columns={
+                    "nom": "Magasin",
+                    "emplacement": "Zone",
+                    "capacite_kg": "Capacité (kg)",
+                    "stock_actuel": "STOCK DISPO (kg)",
+                }),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Capacité (kg)": st.column_config.NumberColumn(format="%.0f"),
+                    "STOCK DISPO (kg)": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+
+        sorties_sans_lot = _safe_float(get_single_value("""
+            SELECT COALESCE(SUM(quantite_kg), 0) FROM ventes
+            WHERE statut_livraison = 'Livré'
+              AND (numero_lot_source IS NULL
+                   OR numero_lot_source NOT IN (SELECT numero_lot FROM stock_par_magasin))
+        """))
+        if sorties_sans_lot > 0:
+            st.info(
+                f"ℹ️ {_fmt_kg(sorties_sans_lot)} kg de sorties ne sont pas rattachés à un lot. "
+                f"Ils sont bien déduits du stock du magasin, mais pas du détail par lot ci-dessous."
+            )
+    except Exception as e:
+        st.error(f"❌ Erreur stock par magasin : {e}")
+
+    st.divider()
+
+    # =========================================================
+    # SECTION 4 : DÉTAIL PAR LOT (indicatif)
+    # =========================================================
+    st.markdown("### 📋 Détail par lot (indicatif)")
+    st.caption(
+        "Le stock réel fait foi au niveau du magasin (tableau ci-dessus). "
+        "Le « Reste du lot » est indicatif : il dépend du rattachement des ventes à un lot."
+    )
 
     df_stock = get_dataframe_from_query("""
-    SELECT
-        spm.id,
-        spm.magasin,
-        spm.numero_lot,
-        spm.poids_brut_recu,
-        spm.poids_net_recu,
-        spm.refaction,
-        spm.poids_net_payable,
-        COALESCE((
-            SELECT SUM(v.quantite_kg)
-            FROM ventes v
-            WHERE v.numero_lot_source = spm.numero_lot
-              AND v.statut_livraison = 'Livré'
-        ), 0) AS quantite_livree,
-        spm.quantite_transferee_in,
-        spm.quantite_transferee_out,
-        GREATEST(0,
-            spm.poids_net_payable
-            + spm.quantite_transferee_in
-            - spm.quantite_transferee_out
-            - COALESCE((
+        SELECT
+            spm.id,
+            spm.magasin,
+            spm.numero_lot,
+            spm.poids_brut_recu,
+            spm.poids_net_recu,
+            spm.refaction,
+            spm.poids_net_payable,
+            COALESCE((
                 SELECT SUM(v.quantite_kg)
                 FROM ventes v
                 WHERE v.numero_lot_source = spm.numero_lot
                   AND v.statut_livraison = 'Livré'
-            ), 0)
-        ) AS stock_disponible,
-        spm.date_derniere_maj
-    FROM stock_par_magasin spm
-    WHERE spm.poids_net_payable > 0
-    ORDER BY spm.magasin, stock_disponible DESC
-""")
+            ), 0) AS quantite_livree,
+            spm.quantite_transferee_in,
+            spm.quantite_transferee_out,
+            (
+                spm.poids_net_payable
+                + spm.quantite_transferee_in
+                - spm.quantite_transferee_out
+                - COALESCE((
+                    SELECT SUM(v.quantite_kg)
+                    FROM ventes v
+                    WHERE v.numero_lot_source = spm.numero_lot
+                      AND v.statut_livraison = 'Livré'
+                ), 0)
+            ) AS reste_lot,
+            spm.date_derniere_maj
+        FROM stock_par_magasin spm
+        WHERE spm.poids_net_payable > 0
+        ORDER BY spm.magasin, reste_lot DESC
+    """)
 
     if df_stock.empty:
-        st.info("ℹ️ Aucun stock enregistré pour le moment.")
+        st.info("ℹ️ Aucun lot enregistré pour le moment.")
     else:
-        # Normalisation
         df_stock.columns = [str(c).strip().lower() for c in df_stock.columns]
         for col in ['poids_brut_recu', 'poids_net_recu', 'refaction',
                     'poids_net_payable', 'quantite_livree',
                     'quantite_transferee_in', 'quantite_transferee_out',
-                    'stock_disponible']:
+                    'reste_lot']:
             if col in df_stock.columns:
                 df_stock[col] = pd.to_numeric(df_stock[col], errors='coerce').fillna(0.0)
 
-        # Filtres simplifiés
+        # Filtres
         with st.container(border=True):
             fc1, fc2 = st.columns(2)
             magasins_dispo = ["Tous"] + sorted(df_stock['magasin'].dropna().unique().tolist())
@@ -8351,16 +8373,23 @@ elif choix == "📦 Mouvements de Stock":
         if filtre_lot:
             df_aff = df_aff[df_aff['numero_lot'].str.contains(filtre_lot, case=False, na=False)]
 
-        # KPI filtres
-        if not df_aff.empty:
+        if df_aff.empty:
+            st.warning("Aucun lot ne correspond à ces filtres.")
+        else:
             k1, k2, k3 = st.columns(3)
             k1.metric("📦 Lots affichés", f"{len(df_aff)}")
-            k2.metric("🏪 Stock total", f"{_fmt_kg(df_aff['stock_disponible'].sum())} kg")
+            k2.metric("🏪 Reste total des lots", f"{_fmt_kg(df_aff['reste_lot'].sum())} kg")
             k3.metric("💰 Net payable", f"{_fmt_kg(df_aff['poids_net_payable'].sum())} kg")
 
-            # Préparation affichage
-            df_show = df_aff.copy()
-            df_show = df_show.rename(columns={
+            # Anomalies : lots avec reste négatif (sur-livraison)
+            nb_negatifs = int((df_aff['reste_lot'] < -0.01).sum())
+            if nb_negatifs > 0:
+                st.warning(
+                    f"⚠️ {nb_negatifs} lot(s) ont un reste négatif : "
+                    f"les livraisons dépassent le poids reçu. Vérifiez le rattachement des ventes."
+                )
+
+            df_show = df_aff.rename(columns={
                 'magasin': 'Magasin',
                 'numero_lot': 'N° Lot',
                 'poids_brut_recu': 'Brut Reçu (kg)',
@@ -8370,15 +8399,15 @@ elif choix == "📦 Mouvements de Stock":
                 'quantite_livree': 'Livré (kg)',
                 'quantite_transferee_in': 'Transf. + (kg)',
                 'quantite_transferee_out': 'Transf. − (kg)',
-                'stock_disponible': 'STOCK DISPO (kg)',
+                'reste_lot': 'Reste du lot (kg)',
                 'date_derniere_maj': 'Dernière MAJ',
             })
 
             cols_affichage = [
                 'Magasin', 'N° Lot', 'Brut Reçu (kg)', 'Net Reçu (kg)',
                 'Réfaction (kg)', 'Net Payable (kg)', 'Livré (kg)',
-                'Transf. + (kg)', 'Transf. − (kg)', 'STOCK DISPO (kg)',
-                'Dernière MAJ'
+                'Transf. + (kg)', 'Transf. − (kg)', 'Reste du lot (kg)',
+                'Dernière MAJ',
             ]
             df_show = df_show[[c for c in cols_affichage if c in df_show.columns]]
 
@@ -8394,143 +8423,68 @@ elif choix == "📦 Mouvements de Stock":
                     "Livré (kg)": st.column_config.NumberColumn(format="%.2f"),
                     "Transf. + (kg)": st.column_config.NumberColumn(format="%.2f"),
                     "Transf. − (kg)": st.column_config.NumberColumn(format="%.2f"),
-                    "STOCK DISPO (kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "Reste du lot (kg)": st.column_config.NumberColumn(format="%.2f"),
                     "Dernière MAJ": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
-                }
+                },
             )
 
-            # Export
             ce1, ce2 = st.columns(2)
             with ce1:
                 st.download_button(
                     "📥 Exporter CSV",
                     df_show.to_csv(index=False).encode('utf-8'),
-                    f"stock_par_magasin_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    f"stock_par_lot_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     "text/csv",
-                    use_container_width=True
+                    use_container_width=True,
                 )
             with ce2:
                 try:
                     st.download_button(
                         "📥 Exporter Excel",
                         convertir_df_excel(df_show),
-                        f"stock_par_magasin_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        f"stock_par_lot_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+                        use_container_width=True,
                     )
-                except NameError:
+                except Exception:
                     pass
-        else:
-            st.warning("Aucun lot ne correspond à ces filtres.")
 
     st.divider()
 
     # =========================================================
-    # SECTION 4 : AJUSTEMENT MANUEL (simplifié)
+    # SECTION 5 : CORRECTION DU STOCK
     # =========================================================
-    with st.expander("🔧 Ajustement manuel du stock", expanded=False):
-        st.caption("Corrigez un écart terrain, régularisez une perte, ou ajustez après un recomptage.")
-        
-        try:
-            rows_ajust = fetch_all("""
-                SELECT 
-                    spm.id,
-                    spm.magasin,
-                    spm.numero_lot,
-                    GREATEST(0,
-                        spm.poids_net_payable
-                        + spm.quantite_transferee_in
-                        - spm.quantite_transferee_out
-                        - COALESCE((
-                            SELECT SUM(v.quantite_kg)
-                            FROM ventes v
-                            WHERE v.numero_lot_source = spm.numero_lot
-                              AND v.statut_livraison = 'Livré'
-                        ), 0)
-                    ) AS stock_dispo_reel
-                FROM stock_par_magasin spm
-                WHERE spm.poids_net_payable > 0
-                ORDER BY spm.magasin, spm.numero_lot DESC
-            """)
-
-            if not rows_ajust:
-                st.info("Aucun lot à ajuster.")
-            else:
-                dict_lots = {
-                    f"[{r[1]}] {r[2]} — Dispo : {_fmt_kg(r[3])} kg": r
-                    for r in rows_ajust
-                }
-
-                choix_lot = st.selectbox("📦 Lot à ajuster", list(dict_lots.keys()), key="ajust_v3_lot")
-                lot_data = dict_lots[choix_lot]
-                stock_actuel = _safe_float(lot_data[3])
-
-                with st.form("form_ajustement_stock_v3"):
-                    nouveau_stock = st.number_input(
-                        "🎯 Stock physique compté (kg)",
-                        min_value=0.0,
-                        value=float(stock_actuel),
-                        step=10.0,
-                        key="ajust_v3_nouveau"
-                    )
-                    motif = st.text_area("📝 Justification", height=80, key="ajust_v3_motif")
-                    
-                    ecart = nouveau_stock - stock_actuel
-                    if abs(ecart) < 0.01:
-                        st.info("Aucun écart.")
-                    elif ecart > 0:
-                        st.warning(f"Écart POSITIF : +{_fmt_kg(ecart)} kg")
-                    else:
-                        st.error(f"Écart NÉGATIF : {_fmt_kg(ecart)} kg")
-
-                    submit = st.form_submit_button("✅ Appliquer", type="primary", use_container_width=True)
-
-                    if submit:
-                        if abs(ecart) < 0.01:
-                            st.info("Aucun ajustement nécessaire.")
-                        elif not motif.strip():
-                            st.error("❌ Le motif est obligatoire.")
-                        else:
-                            try:
-                                with conn.cursor() as cur:
-                                    cur.execute("""
-                                        UPDATE stock_par_magasin
-                                        SET quantite_livree = quantite_livree + %s,
-                                            date_derniere_maj = CURRENT_TIMESTAMP
-                                        WHERE id = %s
-                                    """, (-ecart, lot_data[0]))
-                                    conn.commit()
-                                log_action(f"🔧 AJUSTEMENT : {lot_data[1]}/{lot_data[2]} {ecart:+.2f} kg")
-                                st.success(f"✅ Stock ajusté : {ecart:+,.2f} kg")
-                                st.rerun()
-                            except Exception as e:
-                                conn.rollback()
-                                st.error(f"❌ Erreur : {e}")
-        except Exception as e:
-            st.error(f"❌ Erreur : {e}")
+    st.info(
+        "🔧 Pour corriger un stock (recomptage, perte, écart terrain), utilisez "
+        "**🏪 Magasins → ⚙️ Paramètres → Corriger le stock**. "
+        "C'est le seul ajustement pris en compte dans le calcul du stock."
+    )
 
     st.divider()
 
     # =========================================================
-    # SECTION 5 : HISTORIQUE DES MOUVEMENTS
+    # SECTION 6 : HISTORIQUE DES MOUVEMENTS
     # =========================================================
     st.markdown("### 📜 Historique des mouvements")
 
     with st.container(border=True):
         col_f1, col_f2, col_f3 = st.columns(3)
-        magasins_db = [row[0] for row in fetch_all(
+        mags_hist = [row[0] for row in fetch_all(
             "SELECT DISTINCT magasin_destination FROM stock "
-            "WHERE magasin_destination IS NOT NULL"
+            "WHERE magasin_destination IS NOT NULL ORDER BY 1"
         )]
-        f_magasin = col_f1.selectbox("🏢 Magasin", ["Tous"] + magasins_db, key="hist_v3_magasin")
+        f_magasin = col_f1.selectbox("🏢 Magasin", ["Tous"] + mags_hist, key="hist_v3_magasin")
         f_type = col_f2.selectbox("🔄 Type", ["Tous", "Entrée", "Sortie"], key="hist_v3_type")
         f_periode = col_f3.date_input(
             "📅 Période",
             value=(date.today() - timedelta(days=30), date.today()),
-            key="hist_v3_periode"
+            key="hist_v3_periode",
         )
 
-    q_hist = "SELECT id, date, type, quantite_kg, origine, magasin_destination, fournisseur, commentaire FROM stock WHERE 1=1"
+    q_hist = (
+        "SELECT id, date, type, quantite_kg, origine, magasin_destination, "
+        "fournisseur, commentaire FROM stock WHERE 1=1"
+    )
     p_hist = []
     if f_magasin != "Tous":
         q_hist += " AND magasin_destination = %s"
@@ -8540,7 +8494,10 @@ elif choix == "📦 Mouvements de Stock":
         p_hist.append(f_type)
     if isinstance(f_periode, tuple) and len(f_periode) == 2:
         q_hist += " AND date >= %s AND date <= %s"
-        p_hist.extend([f_periode[0].strftime("%Y-%m-%d"), f_periode[1].strftime("%Y-%m-%d 23:59:59")])
+        p_hist.extend([
+            f_periode[0].strftime("%Y-%m-%d"),
+            f_periode[1].strftime("%Y-%m-%d 23:59:59"),
+        ])
     q_hist += " ORDER BY date DESC LIMIT 500"
 
     df_hist = get_dataframe_from_query(q_hist, p_hist)
@@ -8557,7 +8514,7 @@ elif choix == "📦 Mouvements de Stock":
                 "date": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
                 "quantite_kg": st.column_config.NumberColumn(format="%.2f kg"),
                 "type": st.column_config.TextColumn("Type", width="small"),
-            }
+            },
         )
 # ==============================================================================
 # 1. CODE DE L'ONGLET CONTRATS
