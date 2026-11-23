@@ -36,7 +36,7 @@ st.set_page_config(page_title="ERP FRIENDS TRADING", layout="wide")
 import time
 from streamlit.delta_generator import DeltaGenerator
 
-ANTI_DOUBLE_CLIC_SECONDES = 6
+ANTI_DOUBLE_CLIC_SECONDES = 5
 _LABELS_EXEMPTES = ("←", "Retour", "Rafra", "Effacer")   # navigation : jamais bloquée
 
 def _proteger_contre_double_clic(fonction_originale):
