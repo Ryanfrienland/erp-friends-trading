@@ -30,7 +30,46 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # 1. CONFIGURATION DE LA PAGE
 # ==========================================
 st.set_page_config(page_title="ERP FRIENDS TRADING", layout="wide")
+# ==========================================
+# 🛡️ ANTI DOUBLE-CLIC GLOBAL (tous les boutons et formulaires)
+# ==========================================
+import time
+from streamlit.delta_generator import DeltaGenerator
 
+ANTI_DOUBLE_CLIC_SECONDES = 6
+_LABELS_EXEMPTES = ("←", "Retour", "Rafra", "Effacer")   # navigation : jamais bloquée
+
+def _proteger_contre_double_clic(fonction_originale):
+    def _wrapper(self, label="Submit", *args, **kwargs):
+        clique = fonction_originale(self, label, *args, **kwargs)
+        if not clique:
+            return clique
+        if any(str(label).startswith(x) or x in str(label) for x in _LABELS_EXEMPTES):
+            return clique
+
+        cle_widget = kwargs.get("key") or (args[0] if args and isinstance(args[0], str) else "")
+        cle_verrou = f"_verrou_{label}|{cle_widget}"
+        maintenant = time.time()
+        dernier = st.session_state.get(cle_verrou, 0)
+
+        if maintenant - dernier < ANTI_DOUBLE_CLIC_SECONDES:
+            st.toast("⏳ Action déjà prise en compte — double clic ignoré.", icon="⚠️")
+            return False
+
+        st.session_state[cle_verrou] = maintenant
+        return clique
+    return _wrapper
+
+try:
+    if not getattr(DeltaGenerator, "_anti_double_clic_installe", False):
+        DeltaGenerator.button = _proteger_contre_double_clic(DeltaGenerator.button)
+        DeltaGenerator.form_submit_button = _proteger_contre_double_clic(DeltaGenerator.form_submit_button)
+        DeltaGenerator._anti_double_clic_installe = True
+    # Reliaison des raccourcis st.button / st.form_submit_button (à chaque exécution)
+    st.button = st._main.button
+    st.form_submit_button = st._main.form_submit_button
+except Exception as _e:
+    logging.error(f"Anti double-clic non installé : {_e}")
 from qr_verifier import afficher_page_verification
 afficher_page_verification()
 # ==========================================
